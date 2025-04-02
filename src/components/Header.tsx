@@ -27,7 +27,7 @@ const Header: React.FC = () => {
         <div className="flex items-center mb-4 md:mb-0">
           <Droplet className="h-8 w-8 text-primary mr-2" />
           <h1 className="text-2xl font-semibold text-gray-800">
-            Auto Irrigation System
+          PT DLJ1 seedling watering system
           </h1>
         </div>
         

@@ -1,69 +1,260 @@
-# Welcome to your Lovable project
+# PT DLJ1 Seedling Watering System
 
-## Project info
+Sistem kontrol pompa air otomatis untuk pembibitan dengan fitur penjadwalan dan monitoring.
 
-**URL**: https://lovable.dev/projects/66c8f457-8a97-4e09-a062-d12e0ee7771e
+## Fitur Utama
 
-## How can I edit this code?
+- Kontrol sistem pompa (System ON/OFF)
+- Kontrol starter motor dengan timer otomatis (2 detik)
+- Penjadwalan otomatis
+- Monitoring status sistem
+- Pencatatan log aktivitas
+- Antarmuka web yang responsif
 
-There are several ways of editing your application.
+## Persyaratan Sistem
 
-**Use Lovable**
+- Node.js versi 18 atau lebih baru
+- npm (Node Package Manager)
+- Browser modern (Chrome, Firefox, Edge, dll)
+- ESP32 controller (untuk kontrol hardware)
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/66c8f457-8a97-4e09-a062-d12e0ee7771e) and start prompting.
+## Instalasi
 
-Changes made via Lovable will be committed automatically to this repo.
+1. Pastikan Node.js dan npm sudah terinstal. Untuk mengecek:
+   ```bash
+   node --version
+   npm --version
+   ```
 
-**Use your preferred IDE**
+2. Clone repository ini:
+   ```bash
+   git clone <repository-url>
+   cd auto-pump-scheduler
+   ```
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+3. Install dependencies:
+   ```bash
+   npm install
+   ```
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+4. Jalankan aplikasi dalam mode development:
+   ```bash
+   npm run dev
+   ```
 
-Follow these steps:
+5. Buka browser dan akses:
+   ```
+   http://localhost:5173
+   ```
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+## Panduan Instalasi Auto Pump Scheduler
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+## Persyaratan Sistem
 
-# Step 3: Install the necessary dependencies.
-npm i
+### Untuk Aplikasi Web
+1. Node.js versi 18 atau lebih tinggi
+2. npm (Node Package Manager)
+3. Git
+4. Browser modern (Chrome, Firefox, Edge)
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
-```
+### Untuk ESP32
+1. Arduino IDE
+2. Library yang diperlukan:
+   - WebSocketsServer
+   - ArduinoJson
+   - WiFi
+3. ESP32 DevKit
+4. 2 Relay Module
+5. Sensor level air (opsional)
+6. Sensor aliran air (opsional)
 
-**Edit a file directly in GitHub**
+## Langkah-langkah Instalasi
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+### A. Instalasi Aplikasi Web
 
-**Use GitHub Codespaces**
+1. Clone repository:
+   ```bash
+   git clone https://github.com/your-username/auto-pump-scheduler.git
+   cd auto-pump-scheduler
+   ```
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+2. Install dependensi:
+   ```bash
+   npm install
+   ```
 
-## What technologies are used for this project?
+3. Jalankan aplikasi:
+   ```bash
+   npm run dev
+   ```
 
-This project is built with .
+4. Buka aplikasi di browser:
+   ```
+   http://localhost:5173
+   ```
 
+### B. Instalasi ESP32
+
+1. Buka Arduino IDE
+
+2. Install Library yang Diperlukan:
+   - Buka menu Sketch > Include Library > Manage Libraries
+   - Cari dan install library berikut:
+     - "WebSocketsServer"
+     - "ArduinoJson"
+     - "ESP32" (board manager)
+
+3. Konfigurasi ESP32:
+   - Buka file `esp32/pump_controller/pump_controller.ino`
+   - Ubah konfigurasi WiFi:
+     ```cpp
+     const char* ssid = "NamaWiFiAnda";
+     const char* password = "PasswordWiFiAnda";
+     ```
+
+4. Wiring ESP32:
+   - Hubungkan Relay 1 (Daya Sistem) ke GPIO 26
+   - Hubungkan Relay 2 (Starter Motor) ke GPIO 27
+   - Opsional:
+     - Sensor level air ke GPIO 34
+     - Sensor aliran air ke GPIO 35
+
+5. Upload kode:
+   - Pilih board "ESP32 Dev Module" di Arduino IDE
+   - Pilih port COM yang sesuai
+   - Tekan tombol Upload
+
+### C. Menghubungkan Aplikasi Web dengan ESP32
+
+1. Dapatkan IP Address ESP32:
+   - Buka Serial Monitor di Arduino IDE
+   - Catat IP address yang muncul (contoh: 192.168.1.100)
+
+2. Konfigurasi Aplikasi Web:
+   - Buka aplikasi web di browser
+   - Masuk ke menu Settings
+   - Masukkan IP address ESP32
+   - Klik tombol Connect
+
+## Pengujian Koneksi
+
+1. Indikator Koneksi:
+   - Status "Connected" di dashboard
+   - LED built-in ESP32 akan berkedip saat terhubung
+
+2. Test Fungsi:
+   - Nyalakan System Power
+   - Coba jalankan Motor
+   - Monitor status di Serial Monitor
+
+## Troubleshooting
+
+1. Masalah Koneksi:
+   - Pastikan ESP32 dan komputer dalam jaringan WiFi yang sama
+   - Periksa IP address ESP32
+   - Restart ESP32 jika perlu
+
+2. Masalah Relay:
+   - Periksa sambungan kabel
+   - Pastikan tegangan relay sesuai (5V)
+   - Cek status di Serial Monitor
+
+3. Aplikasi Web Error:
+   - Hapus cache browser
+   - Periksa console browser
+   - Restart aplikasi web
+
+## Fitur Keamanan
+
+1. Watchdog Timer:
+   - Otomatis mematikan sistem jika tidak ada komunikasi selama 30 detik
+   - Mencegah pompa tetap menyala jika koneksi terputus
+
+2. State Memory:
+   - Menyimpan status terakhir di EEPROM
+   - Memulihkan status setelah restart
+
+3. Emergency Stop:
+   - Tombol emergency stop di aplikasi
+   - Mematikan semua relay sekaligus
+
+## Monitoring
+
+1. Serial Monitor:
+   - Baud rate: 115200
+   - Menampilkan log aktivitas sistem
+
+2. Aplikasi Web:
+   - Status real-time
+   - Level air (jika sensor terpasang)
+   - Aliran air (jika sensor terpasang)
+
+## Pemeliharaan
+
+1. Backup Kode:
+   - Simpan salinan kode ESP32
+   - Backup konfigurasi aplikasi
+
+2. Pemeriksaan Rutin:
+   - Cek kondisi relay setiap bulan
+   - Periksa sambungan kabel
+   - Update firmware jika ada
+
+## Dukungan
+
+Untuk bantuan lebih lanjut:
+1. Buka issues di GitHub repository
+2. Dokumentasi teknis di folder `/docs`
+3. Kontak pengembang melalui email
+
+## Konfigurasi ESP32
+
+1. Buka halaman Settings di aplikasi
+2. Masukkan IP Address ESP32 (default: 192.168.1.100)
+3. Klik Save untuk menyimpan konfigurasi
+4. Status koneksi akan ditampilkan di Dashboard
+
+## Penggunaan
+
+1. **System Power (Relay 1)**
+   - Mengaktifkan power sistem utama
+   - Harus ON sebelum motor bisa distart
+
+2. **Start Motor (Relay 2 - Starter)**
+   - Aktif selama 2 detik untuk starter motor
+   - Otomatis mati setelah 2 detik
+   - Memerlukan System Power ON
+
+3. **Stop All**
+   - Emergency stop
+   - Mematikan semua relay
+
+4. **Penjadwalan**
+   - Atur jadwal penyiraman di halaman Scheduler
+   - Set waktu mulai dan selesai
+   - Pilih hari-hari aktif
+   - Aktifkan/nonaktifkan jadwal
+
+5. **Monitoring**
+   - Pantau status sistem di Dashboard
+   - Lihat riwayat aktivitas di halaman Logs
+
+## Troubleshooting
+
+1. **Jika npm tidak bisa dijalankan:**
+   - Buka PowerShell sebagai Administrator
+   - Jalankan: `Set-ExecutionPolicy RemoteSigned`
+   - Pilih "Yes" atau "A" ketika diminta
+
+2. **Jika tidak bisa terhubung ke ESP32:**
+   - Pastikan ESP32 dan komputer berada dalam jaringan yang sama
+   - Verifikasi IP Address di halaman Settings
+   - Periksa koneksi jaringan
+
+## Pengembangan
+
+Aplikasi ini dibangun menggunakan:
+- React + TypeScript
 - Vite
-- TypeScript
-- React
-- shadcn-ui
 - Tailwind CSS
-
-## How can I deploy this project?
-
-Simply open [Lovable](https://lovable.dev/projects/66c8f457-8a97-4e09-a062-d12e0ee7771e) and click on Share -> Publish.
-
-## I want to use a custom domain - is that possible?
-
-We don't support custom domains (yet). If you want to deploy your project under your own domain then we recommend using Netlify. Visit our docs for more details: [Custom domains](https://docs.lovable.dev/tips-tricks/custom-domain/)
+- shadcn/ui components

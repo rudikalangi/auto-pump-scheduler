@@ -1,4 +1,3 @@
-
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { LogEntry } from '@/components/LogItem';
@@ -16,6 +15,7 @@ interface PumpContextType {
   // Pump State
   systemOn: boolean;
   motorRunning: boolean;
+  relayOn: boolean;
   toggleSystem: () => void;
   startMotor: () => void;
   stopAll: () => void;
@@ -40,10 +40,12 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return saved || '192.168.1.100';
   });
   const [isConnected, setIsConnected] = useState(false);
+  const [ws, setWs] = useState<WebSocket | null>(null);
   
   // Pump state
   const [systemOn, setSystemOn] = useState(false);
   const [motorRunning, setMotorRunning] = useState(false);
+  const [relayOn, setRelayOn] = useState(false);
   
   // Schedules
   const [schedules, setSchedules] = useState<Schedule[]>(() => {
@@ -92,47 +94,69 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return newLog;
   };
   
-  // Connect/Disconnect
+  // Connect/Disconnect WebSocket
   const connect = () => {
-    // In a real app, this would connect to the ESP32 via websocket
-    // For now, we'll simulate it
-    setIsConnected(true);
-    addLogEntry('Connection', `Connected to ESP32 at ${ipAddress}`, 'success');
-    toast.success(`Connected to ESP32 at ${ipAddress}`);
+    if (ws) {
+      ws.close();
+    }
+
+    const newWs = new WebSocket(`ws://${ipAddress}/ws`);
+    
+    newWs.onopen = () => {
+      setIsConnected(true);
+      addLogEntry('Connection', `Connected to ESP32 at ${ipAddress}`, 'success');
+      toast.success(`Connected to ESP32 at ${ipAddress}`);
+    };
+    
+    newWs.onclose = () => {
+      setIsConnected(false);
+      setSystemOn(false);
+      setMotorRunning(false);
+      setRelayOn(false);
+      addLogEntry('Connection', `Disconnected from ESP32 at ${ipAddress}`, 'info');
+      toast.info('Disconnected from ESP32');
+    };
+    
+    newWs.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      setSystemOn(data.systemOn);
+      setMotorRunning(data.motorRunning);
+    };
+    
+    setWs(newWs);
   };
   
   const disconnect = () => {
-    setIsConnected(false);
-    setSystemOn(false);
-    setMotorRunning(false);
-    addLogEntry('Connection', `Disconnected from ESP32 at ${ipAddress}`, 'info');
-    toast.info('Disconnected from ESP32');
+    if (ws) {
+      ws.close();
+    }
+    setWs(null);
   };
   
-  // Pump controls
+  // Pump controls with WebSocket
   const toggleSystem = () => {
-    if (!isConnected) {
+    if (!isConnected || !ws) {
       toast.error('Not connected to ESP32');
       return;
     }
     
-    const newState = !systemOn;
-    setSystemOn(newState);
+    // Toggle system state
+    const newSystemState = !systemOn;
+    setSystemOn(newSystemState);
     
-    if (!newState) {
-      setMotorRunning(false);
-    }
+    // Send command to ESP32
+    ws.send(JSON.stringify({ 
+      command: newSystemState ? 'system_on' : 'system_off',
+      relay: 1,
+      state: newSystemState
+    }));
     
-    addLogEntry(
-      'System Power',
-      newState ? 'System turned ON' : 'System turned OFF',
-      newState ? 'success' : 'info'
-    );
-    toast(newState ? 'System turned ON' : 'System turned OFF');
+    addLogEntry('System', newSystemState ? 'System turned ON' : 'System turned OFF', 'info');
+    toast.success(newSystemState ? 'System turned ON' : 'System turned OFF');
   };
   
   const startMotor = () => {
-    if (!isConnected) {
+    if (!isConnected || !ws) {
       toast.error('Not connected to ESP32');
       return;
     }
@@ -142,23 +166,139 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
     
+    // Start motor by activating Relay 2
+    ws.send(JSON.stringify({ 
+      command: 'start_motor',
+      relay: 2,
+      state: true
+    }));
+    
     setMotorRunning(true);
-    addLogEntry('Motor', 'Motor started', 'success');
-    toast.success('Motor started');
+    setRelayOn(true);
+    addLogEntry('Motor', 'Starting motor', 'info');
+    toast.success('Starting motor');
+    
+    // After 2 seconds, turn off Relay 2 but keep system on
+    setTimeout(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ 
+          command: 'motor_off',
+          relay: 2,
+          state: false
+        }));
+      }
+      setRelayOn(false);
+      setMotorRunning(false);
+    }, 2000);
   };
   
   const stopAll = () => {
-    if (!isConnected) {
+    if (!isConnected || !ws) {
       toast.error('Not connected to ESP32');
       return;
     }
     
-    setMotorRunning(false);
+    // Stop everything
+    ws.send(JSON.stringify({ 
+      command: 'stop_all',
+      relay1: false,
+      relay2: false
+    }));
+    
     setSystemOn(false);
-    addLogEntry('Emergency Stop', 'Motor and system power turned OFF', 'warning');
-    toast.info('Motor and system power turned OFF');
+    setMotorRunning(false);
+    setRelayOn(false);
+    
+    addLogEntry('System', 'Emergency stop - all systems OFF', 'warning');
+    toast.success('Emergency stop - all systems OFF');
   };
   
+  // Scheduler Effect
+  useEffect(() => {
+    if (!isConnected || !ws) return;
+
+    const checkSchedule = () => {
+      const now = new Date();
+      const currentDay = now.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+      const currentTime = now.toLocaleTimeString('en-US', { 
+        hour12: false, 
+        hour: '2-digit', 
+        minute: '2-digit' 
+      });
+
+      schedules.forEach(schedule => {
+        if (!schedule.isActive) return;
+        if (!schedule.days.includes(currentDay)) return;
+
+        // Check start time
+        if (currentTime === schedule.startTime) {
+          // First turn on system power (Relay 1)
+          if (!systemOn) {
+            ws.send(JSON.stringify({ 
+              command: 'system_on',
+              relay: 1,
+              state: true
+            }));
+            setSystemOn(true);
+            addLogEntry('Schedule', `Starting scheduled pump operation at ${schedule.startTime}`, 'info');
+            toast.success(`Schedule: Starting pump operation`);
+
+            // Wait 1 second to ensure system is on, then start motor
+            setTimeout(() => {
+              if (ws.readyState === WebSocket.OPEN) {
+                // Start motor (Relay 2)
+                ws.send(JSON.stringify({ 
+                  command: 'start_motor',
+                  relay: 2,
+                  state: true
+                }));
+                setMotorRunning(true);
+                setRelayOn(true);
+
+                // Turn off motor after 2 seconds but keep system on
+                setTimeout(() => {
+                  if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ 
+                      command: 'motor_off',
+                      relay: 2,
+                      state: false
+                    }));
+                    setRelayOn(false);
+                    setMotorRunning(false);
+                  }
+                }, 2000);
+              }
+            }, 1000);
+          }
+        }
+
+        // Check end time
+        if (currentTime === schedule.endTime) {
+          // Turn off everything at end time
+          if (systemOn) {
+            ws.send(JSON.stringify({ 
+              command: 'stop_all',
+              relay1: false,
+              relay2: false
+            }));
+            setSystemOn(false);
+            setMotorRunning(false);
+            setRelayOn(false);
+            addLogEntry('Schedule', `Completed scheduled pump operation at ${schedule.endTime}`, 'info');
+            toast.success(`Schedule: Completed pump operation`);
+          }
+        }
+      });
+    };
+
+    // Check schedule every minute
+    const intervalId = setInterval(checkSchedule, 60000);
+    // Also check immediately on mount or when schedules/connection changes
+    checkSchedule();
+
+    return () => clearInterval(intervalId);
+  }, [isConnected, ws, schedules, systemOn]);
+
   // Schedule management
   const addSchedule = (schedule: Omit<Schedule, 'id'>) => {
     const newSchedule: Schedule = {
@@ -199,6 +339,7 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
     disconnect,
     systemOn,
     motorRunning,
+    relayOn,
     toggleSystem,
     startMotor,
     stopAll,

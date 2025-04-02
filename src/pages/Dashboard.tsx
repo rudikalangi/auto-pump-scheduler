@@ -1,4 +1,3 @@
-
 import React, { useEffect } from 'react';
 import { Power, Play, Square, WifiOff, Droplet, Activity, Gauge } from 'lucide-react';
 import Header from '@/components/Header';
@@ -10,7 +9,8 @@ const Dashboard: React.FC = () => {
   const { 
     isConnected, 
     systemOn, 
-    motorRunning, 
+    motorRunning,
+    relayOn, 
     toggleSystem, 
     startMotor, 
     stopAll,
@@ -52,10 +52,10 @@ const Dashboard: React.FC = () => {
             />
             
             <StatusCard
-              title="Motor"
-              value={motorRunning ? "Running" : "Stopped"}
+              title="Motor Status"
+              value={motorRunning ? (relayOn ? "Starting" : "Running") : "Stopped"}
               icon={motorRunning ? <Activity className="h-5 w-5" /> : <Gauge className="h-5 w-5" />}
-              status={motorRunning ? "success" : "normal"}
+              status={motorRunning ? (relayOn ? "warning" : "success") : "normal"}
             />
           </div>
         </div>
@@ -78,8 +78,8 @@ const Dashboard: React.FC = () => {
               icon={<Play className="h-6 w-6" />}
               onClick={startMotor}
               variant="starter"
-              isActive={motorRunning}
-              disabled={!isConnected || !systemOn}
+              isActive={relayOn}
+              disabled={!isConnected || !systemOn || motorRunning}
             />
             
             <ControlButton
