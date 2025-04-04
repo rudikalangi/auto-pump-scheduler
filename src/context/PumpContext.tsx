@@ -180,25 +180,28 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     if (!ipAddress) return;
 
-    const wsUrl = `ws://${ipAddress}/ws`;
+    const wsUrl = `ws://${ipAddress}`;  // Menggunakan port default 80
     let reconnectTimer: NodeJS.Timeout;
     let connectionAttempts = 0;
-    const MAX_RECONNECT_ATTEMPTS = 5;
-    const RECONNECT_DELAY = 3000;
+    const MAX_RECONNECT_ATTEMPTS = 10;  // Menambah jumlah percobaan
+    const RECONNECT_DELAY = 2000;      // Mengurangi delay reconnect
 
     const connectWebSocket = () => {
+      console.log(`Attempting to connect to ${wsUrl}`);
       const socket = new WebSocket(wsUrl);
 
       socket.onopen = () => {
+        console.log('WebSocket connection established');
         setIsConnected(true);
         connectionAttempts = 0;
         showToast({
           title: "Connected",
-          description: "Connected to pump controller"
+          description: `Connected to pump controller at ${ipAddress}`
         });
       };
 
-      socket.onclose = () => {
+      socket.onclose = (event) => {
+        console.log('WebSocket connection closed:', event);
         setIsConnected(false);
         setSystemOn(false);
         setMotorRunning(false);
@@ -215,13 +218,14 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
           showToast({
             variant: "destructive",
             title: "Connection Failed",
-            description: "Maximum reconnection attempts reached. Please check your connection."
+            description: "Maximum reconnection attempts reached. Please check:\n1. ESP32 is powered on\n2. Connected to same network\n3. IP address is correct"
           });
         }
       };
 
       socket.onmessage = (event) => {
         try {
+          console.log('Received WebSocket message:', event.data);
           const data = JSON.parse(event.data);
           handleWebSocketMessage(data);
         } catch (error) {
@@ -238,8 +242,8 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.error('WebSocket error:', error);
         showToast({
           variant: "destructive",
-          title: "Error",
-          description: "WebSocket connection error"
+          title: "Connection Error",
+          description: "Failed to connect. Please check network settings and ESP32 status."
         });
       };
 
@@ -249,6 +253,7 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
     connectWebSocket();
 
     return () => {
+      console.log('Cleaning up WebSocket connection');
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
       }
