@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { toast } from 'sonner';
+import { useToast } from "@/components/ui/use-toast";
+import { Toast } from "@/components/ui/toast";
 import { LogEntry } from '@/components/LogItem';
 import { Schedule } from '@/components/ScheduleItem';
 import { v4 as uuidv4 } from 'uuid';
@@ -18,7 +19,16 @@ interface PumpContextType {
   relayOn: boolean;
   toggleSystem: () => void;
   startMotor: () => void;
+  stopMotor: () => void;
   stopAll: () => void;
+  
+  // Remote Sensor Data
+  remoteMoisture: number;
+  lastRemoteUpdate: number;
+  moistureHistory: { timestamp: number; value: number }[];
+  
+  // Moisture Thresholds
+  setMoistureThresholds: (dry: number, wet: number) => void;
   
   // Schedules
   schedules: Schedule[];
@@ -31,9 +41,17 @@ interface PumpContextType {
   clearLogs: () => void;
 }
 
+interface ToastMessage {
+  title: string;
+  description: string;
+  variant?: "default" | "destructive";
+}
+
 const PumpContext = createContext<PumpContextType | undefined>(undefined);
 
 export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { toast } = useToast();
+  
   // Connection state
   const [ipAddress, setIpAddress] = useState<string>(() => {
     const saved = localStorage.getItem('pumpIpAddress');
@@ -46,6 +64,11 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [systemOn, setSystemOn] = useState(false);
   const [motorRunning, setMotorRunning] = useState(false);
   const [relayOn, setRelayOn] = useState(false);
+  
+  // Remote sensor state
+  const [remoteMoisture, setRemoteMoisture] = useState(0);
+  const [lastRemoteUpdate, setLastRemoteUpdate] = useState(0);
+  const [moistureHistory, setMoistureHistory] = useState<{ timestamp: number; value: number }[]>([]);
   
   // Schedules
   const [schedules, setSchedules] = useState<Schedule[]>(() => {
@@ -94,36 +117,152 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return newLog;
   };
   
+  const showToast = (message: ToastMessage) => {
+    toast({
+      ...message
+    });
+  };
+
+  // WebSocket message handler
+  const handleWebSocketMessage = (data: any) => {
+    try {
+      // Handle system state updates
+      if (data.systemOn !== undefined) {
+        setSystemOn(data.systemOn);
+      }
+      if (data.motorRunning !== undefined) {
+        setMotorRunning(data.motorRunning);
+      }
+      if (data.remoteMoisture !== undefined) {
+        setRemoteMoisture(data.remoteMoisture);
+        setLastRemoteUpdate(Date.now());
+        
+        // Add to history
+        setMoistureHistory(prev => {
+          const newPoint = {
+            timestamp: Date.now(),
+            value: data.remoteMoisture
+          };
+          // Keep last 50 points
+          const history = [...prev, newPoint].slice(-50);
+          return history;
+        });
+      }
+      
+      // Handle threshold update responses
+      if (data.success && data.message === "Thresholds updated") {
+        showToast({
+          title: "Success",
+          description: "Moisture thresholds updated successfully"
+        });
+      }
+      
+      // Handle errors
+      if (data.error) {
+        showToast({
+          variant: "destructive",
+          title: "Error",
+          description: data.error
+        });
+      }
+      
+    } catch (error) {
+      console.error('Failed to process WebSocket message:', error);
+      showToast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to process server message"
+      });
+    }
+  };
+
+  // WebSocket connection effect
+  useEffect(() => {
+    if (!ipAddress) return;
+
+    const wsUrl = `ws://${ipAddress}/ws`;
+    let reconnectTimer: NodeJS.Timeout;
+    let connectionAttempts = 0;
+    const MAX_RECONNECT_ATTEMPTS = 5;
+    const RECONNECT_DELAY = 3000;
+
+    const connectWebSocket = () => {
+      const socket = new WebSocket(wsUrl);
+
+      socket.onopen = () => {
+        setIsConnected(true);
+        connectionAttempts = 0;
+        showToast({
+          title: "Connected",
+          description: "Connected to pump controller"
+        });
+      };
+
+      socket.onclose = () => {
+        setIsConnected(false);
+        setSystemOn(false);
+        setMotorRunning(false);
+        
+        if (connectionAttempts < MAX_RECONNECT_ATTEMPTS) {
+          connectionAttempts++;
+          showToast({
+            variant: "destructive",
+            title: "Connection Lost",
+            description: `Attempting to reconnect (${connectionAttempts}/${MAX_RECONNECT_ATTEMPTS})...`
+          });
+          reconnectTimer = setTimeout(connectWebSocket, RECONNECT_DELAY);
+        } else {
+          showToast({
+            variant: "destructive",
+            title: "Connection Failed",
+            description: "Maximum reconnection attempts reached. Please check your connection."
+          });
+        }
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          handleWebSocketMessage(data);
+        } catch (error) {
+          console.error('Failed to parse WebSocket message:', error);
+          showToast({
+            variant: "destructive",
+            title: "Error",
+            description: "Failed to parse server message"
+          });
+        }
+      };
+
+      socket.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        showToast({
+          variant: "destructive",
+          title: "Error",
+          description: "WebSocket connection error"
+        });
+      };
+
+      setWs(socket);
+    };
+
+    connectWebSocket();
+
+    return () => {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+      }
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
+    };
+  }, [ipAddress]);
+  
   // Connect/Disconnect WebSocket
   const connect = () => {
     if (ws) {
       ws.close();
     }
-
-    const newWs = new WebSocket(`ws://${ipAddress}/ws`);
-    
-    newWs.onopen = () => {
-      setIsConnected(true);
-      addLogEntry('Connection', `Connected to ESP32 at ${ipAddress}`, 'success');
-      toast.success(`Connected to ESP32 at ${ipAddress}`);
-    };
-    
-    newWs.onclose = () => {
-      setIsConnected(false);
-      setSystemOn(false);
-      setMotorRunning(false);
-      setRelayOn(false);
-      addLogEntry('Connection', `Disconnected from ESP32 at ${ipAddress}`, 'info');
-      toast.info('Disconnected from ESP32');
-    };
-    
-    newWs.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      setSystemOn(data.systemOn);
-      setMotorRunning(data.motorRunning);
-    };
-    
-    setWs(newWs);
   };
   
   const disconnect = () => {
@@ -136,81 +275,138 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Pump controls with WebSocket
   const toggleSystem = () => {
     if (!isConnected || !ws) {
-      toast.error('Not connected to ESP32');
+      showToast({
+        variant: "destructive",
+        title: "Error",
+        description: "Not connected to ESP32"
+      });
       return;
     }
     
     // Toggle system state
     const newSystemState = !systemOn;
-    setSystemOn(newSystemState);
     
     // Send command to ESP32
     ws.send(JSON.stringify({ 
-      command: newSystemState ? 'system_on' : 'system_off',
-      relay: 1,
-      state: newSystemState
+      command: newSystemState ? 'system_on' : 'system_off'
     }));
     
     addLogEntry('System', newSystemState ? 'System turned ON' : 'System turned OFF', 'info');
-    toast.success(newSystemState ? 'System turned ON' : 'System turned OFF');
+    showToast({
+      title: newSystemState ? 'System turned ON' : 'System turned OFF',
+      description: newSystemState ? 'System turned ON' : 'System turned OFF',
+    });
   };
   
   const startMotor = () => {
     if (!isConnected || !ws) {
-      toast.error('Not connected to ESP32');
+      showToast({
+        variant: "destructive",
+        title: "Error",
+        description: "Not connected to ESP32"
+      });
       return;
     }
     
     if (!systemOn) {
-      toast.error('System power is OFF');
+      showToast({
+        variant: "destructive",
+        title: "Error",
+        description: "System power is OFF"
+      });
       return;
     }
     
     // Start motor by activating Relay 2
     ws.send(JSON.stringify({ 
-      command: 'start_motor',
-      relay: 2,
-      state: true
+      command: 'start_motor'
     }));
     
     setMotorRunning(true);
-    setRelayOn(true);
-    addLogEntry('Motor', 'Starting motor', 'info');
-    toast.success('Starting motor');
-    
-    // After 2 seconds, turn off Relay 2 but keep system on
+    addLogEntry('Motor', 'Starting motor...', 'info');
+    showToast({
+      title: 'Starting motor...',
+      description: 'Starting motor...',
+    });
+
+    // Update UI after 2 seconds
     setTimeout(() => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ 
-          command: 'motor_off',
-          relay: 2,
-          state: false
-        }));
-      }
-      setRelayOn(false);
       setMotorRunning(false);
+      addLogEntry('Motor', 'Motor started, starter off', 'info');
     }, 2000);
+  };
+  
+  const stopMotor = () => {
+    if (!isConnected || !ws) {
+      showToast({
+        variant: "destructive",
+        title: "Error",
+        description: "Not connected to ESP32"
+      });
+      return;
+    }
+    
+    ws.send(JSON.stringify({ 
+      command: 'motor_off'
+    }));
+    
+    addLogEntry('Motor', 'Stopping motor', 'info');
+    showToast({
+      title: 'Motor stopped',
+      description: 'Motor stopped',
+    });
   };
   
   const stopAll = () => {
     if (!isConnected || !ws) {
-      toast.error('Not connected to ESP32');
+      showToast({
+        variant: "destructive",
+        title: "Error",
+        description: "Not connected to ESP32"
+      });
       return;
     }
     
     // Stop everything
     ws.send(JSON.stringify({ 
-      command: 'stop_all',
-      relay1: false,
-      relay2: false
+      command: 'stop_all'
     }));
     
-    setSystemOn(false);
-    setMotorRunning(false);
-    setRelayOn(false);
-    
     addLogEntry('System', 'Emergency stop - all systems OFF', 'warning');
-    toast.success('Emergency stop - all systems OFF');
+    showToast({
+      title: 'Emergency stop - all systems OFF',
+      description: 'Emergency stop - all systems OFF',
+    });
+  };
+  
+  // Fungsi untuk mengatur threshold kelembaban
+  const setMoistureThresholds = async (dry: number, wet: number) => {
+    if (!ws) {
+      addLogEntry('Error', 'Not connected to pump controller', 'error');
+      return;
+    }
+    
+    try {
+      const message = {
+        command: 'set_thresholds',
+        dryThreshold: dry,
+        wetThreshold: wet
+      };
+      
+      // Kirim perintah ke ESP32
+      ws.send(JSON.stringify(message));
+      
+      // Tambah log entry
+      addLogEntry(
+        'Settings',
+        `Updating moisture thresholds - Dry: ${dry}%, Wet: ${wet}%`,
+        'info'
+      );
+      
+    } catch (error) {
+      console.error('Failed to set thresholds:', error);
+      addLogEntry('Error', 'Failed to set moisture thresholds', 'error');
+    }
   };
   
   // Scheduler Effect
@@ -235,41 +431,27 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
           // First turn on system power (Relay 1)
           if (!systemOn) {
             ws.send(JSON.stringify({ 
-              command: 'system_on',
-              relay: 1,
-              state: true
+              command: 'system_on'
             }));
             setSystemOn(true);
             addLogEntry('Schedule', `Starting scheduled pump operation at ${schedule.startTime}`, 'info');
-            toast.success(`Schedule: Starting pump operation`);
-
-            // Wait 1 second to ensure system is on, then start motor
-            setTimeout(() => {
-              if (ws.readyState === WebSocket.OPEN) {
-                // Start motor (Relay 2)
-                ws.send(JSON.stringify({ 
-                  command: 'start_motor',
-                  relay: 2,
-                  state: true
-                }));
-                setMotorRunning(true);
-                setRelayOn(true);
-
-                // Turn off motor after 2 seconds but keep system on
-                setTimeout(() => {
-                  if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ 
-                      command: 'motor_off',
-                      relay: 2,
-                      state: false
-                    }));
-                    setRelayOn(false);
-                    setMotorRunning(false);
-                  }
-                }, 2000);
-              }
-            }, 1000);
+            showToast({
+              title: `Schedule: Starting pump operation`,
+              description: `Schedule: Starting pump operation`,
+            });
           }
+
+          // Wait 1 second to ensure system is on, then start motor
+          setTimeout(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+              // Start motor (Relay 2)
+              ws.send(JSON.stringify({ 
+                command: 'start_motor'
+              }));
+              setMotorRunning(true);
+              setRelayOn(true);
+            }
+          }, 1000);
         }
 
         // Check end time
@@ -277,15 +459,16 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
           // Turn off everything at end time
           if (systemOn) {
             ws.send(JSON.stringify({ 
-              command: 'stop_all',
-              relay1: false,
-              relay2: false
+              command: 'stop_all'
             }));
             setSystemOn(false);
             setMotorRunning(false);
             setRelayOn(false);
             addLogEntry('Schedule', `Completed scheduled pump operation at ${schedule.endTime}`, 'info');
-            toast.success(`Schedule: Completed pump operation`);
+            showToast({
+              title: `Schedule: Completed pump operation`,
+              description: `Schedule: Completed pump operation`,
+            });
           }
         }
       });
@@ -308,7 +491,10 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
     
     setSchedules(prev => [...prev, newSchedule]);
     addLogEntry('Schedule', `New schedule added: ${schedule.startTime} - ${schedule.endTime}`, 'info');
-    toast.success('Schedule added');
+    showToast({
+      title: 'Schedule added',
+      description: 'Schedule added',
+    });
   };
   
   const updateSchedule = (schedule: Schedule) => {
@@ -316,19 +502,28 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
       prev.map(s => (s.id === schedule.id ? schedule : s))
     );
     addLogEntry('Schedule', `Schedule updated: ${schedule.startTime} - ${schedule.endTime}`, 'info');
-    toast.success('Schedule updated');
+    showToast({
+      title: 'Schedule updated',
+      description: 'Schedule updated',
+    });
   };
   
   const deleteSchedule = (id: string) => {
     setSchedules(prev => prev.filter(s => s.id !== id));
     addLogEntry('Schedule', 'Schedule deleted', 'info');
-    toast.success('Schedule deleted');
+    showToast({
+      title: 'Schedule deleted',
+      description: 'Schedule deleted',
+    });
   };
   
   const clearLogs = () => {
     setLogs([]);
     addLogEntry('Logs', 'All logs cleared', 'info');
-    toast.success('Logs cleared');
+    showToast({
+      title: 'Logs cleared',
+      description: 'Logs cleared',
+    });
   };
   
   const contextValue: PumpContextType = {
@@ -342,7 +537,12 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
     relayOn,
     toggleSystem,
     startMotor,
+    stopMotor,
     stopAll,
+    remoteMoisture,
+    lastRemoteUpdate,
+    moistureHistory,
+    setMoistureThresholds,
     schedules,
     addSchedule,
     updateSchedule,

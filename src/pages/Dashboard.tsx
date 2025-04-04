@@ -3,6 +3,8 @@ import { Power, Play, Square, WifiOff, Droplet, Activity, Gauge } from 'lucide-r
 import Header from '@/components/Header';
 import StatusCard from '@/components/StatusCard';
 import ControlButton from '@/components/ControlButton';
+import RemoteSensorCard from '@/components/RemoteSensorCard';
+import MoistureChart from '@/components/MoistureChart';
 import { usePump } from '@/context/PumpContext';
 
 const Dashboard: React.FC = () => {
@@ -29,10 +31,20 @@ const Dashboard: React.FC = () => {
   }, [isConnected, connect]);
 
   return (
-    <div className="min-h-screen pb-8 animate-fade-in">
+    <div className="container mx-auto p-4 space-y-6 min-h-screen pb-8 animate-fade-in">
       <Header />
       
-      <main className="container mx-auto px-4">
+      <main>
+        <h1 className="text-2xl font-bold mb-4">Dashboard</h1>
+        
+        {!isConnected && (
+          <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-4">
+            <p className="text-yellow-700">
+              Not connected to pump controller. Please check your connection settings.
+            </p>
+          </div>
+        )}
+        
         <div className="mb-8">
           <h2 className="text-2xl font-semibold text-gray-800 mb-6">System Status</h2>
           
@@ -51,6 +63,8 @@ const Dashboard: React.FC = () => {
               status={systemOn ? "success" : "normal"}
             />
             
+            <RemoteSensorCard />
+            
             <StatusCard
               title="Motor Status"
               value={motorRunning ? (relayOn ? "Starting" : "Running") : "Stopped"}
@@ -65,7 +79,7 @@ const Dashboard: React.FC = () => {
           
           <div className="flex flex-wrap justify-center gap-6">
             <ControlButton
-              label="System ON"
+              label={systemOn ? "System OFF" : "System ON"}
               icon={<Power className="h-6 w-6" />}
               onClick={toggleSystem}
               variant="power"
@@ -74,7 +88,7 @@ const Dashboard: React.FC = () => {
             />
             
             <ControlButton
-              label="Start Motor"
+              label={motorRunning ? "Motor Running" : "Start Motor"}
               icon={<Play className="h-6 w-6" />}
               onClick={startMotor}
               variant="starter"
@@ -83,7 +97,7 @@ const Dashboard: React.FC = () => {
             />
             
             <ControlButton
-              label="Stop All"
+              label="Emergency Stop"
               icon={<Square className="h-6 w-6" />}
               onClick={stopAll}
               variant="stop"
@@ -96,12 +110,20 @@ const Dashboard: React.FC = () => {
               <p className="text-gray-600 mb-4">Not connected to ESP32</p>
               <button
                 onClick={connect}
-                className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+                className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors flex items-center justify-center gap-2 mx-auto"
               >
-                Connect
+                <WifiOff className="h-4 w-4" />
+                Connect to ESP32
               </button>
             </div>
           )}
+        </div>
+
+        <div className="glass-panel p-6 mb-8">
+          <h2 className="text-2xl font-semibold text-gray-800 mb-6">Moisture History</h2>
+          <div className="w-full">
+            <MoistureChart />
+          </div>
         </div>
 
         <div className="glass-panel p-6">
@@ -116,13 +138,17 @@ const Dashboard: React.FC = () => {
             <ol className="list-decimal pl-5 space-y-2 mt-2">
               <li><strong>System ON</strong> - Activates the electrical system (like turning a car key to ON)</li>
               <li><strong>Start Motor</strong> - Engages the starter (like turning a car key to START)</li>
-              <li><strong>Stop All</strong> - Emergency stop for both motor and system</li>
+              <li><strong>Emergency Stop</strong> - Emergency stop for both motor and system</li>
             </ol>
             
             <p className="mt-4">
               Use the Scheduler tab to set automatic irrigation times based on days of the week.
             </p>
           </div>
+        </div>
+        
+        <div className="w-full">
+          <MoistureChart />
         </div>
       </main>
     </div>
