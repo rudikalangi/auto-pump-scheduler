@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { useToast } from "@/components/ui/use-toast";
 import { Toast } from "@/components/ui/toast";
 import { LogEntry } from '@/components/LogItem';
@@ -10,6 +10,7 @@ interface PumpContextType {
   ipAddress: string;
   setIpAddress: (ip: string) => void;
   isConnected: boolean;
+  isConnecting: boolean;
   connect: () => void;
   disconnect: () => void;
   
@@ -59,6 +60,7 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
   });
   const [isConnected, setIsConnected] = useState(false);
   const [ws, setWs] = useState<WebSocket | null>(null);
+  const [isConnecting, setIsConnecting] = useState(false);
   
   // Pump state
   const [systemOn, setSystemOn] = useState(false);
@@ -176,53 +178,51 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // WebSocket connection effect
-  useEffect(() => {
-    if (!ipAddress) return;
-
-    const wsUrl = `ws://${ipAddress}`;  // Menggunakan port default 80
-    let reconnectTimer: NodeJS.Timeout;
-    let connectionAttempts = 0;
-    const MAX_RECONNECT_ATTEMPTS = 10;  // Menambah jumlah percobaan
-    const RECONNECT_DELAY = 2000;      // Mengurangi delay reconnect
-
-    const connectWebSocket = () => {
-      console.log(`Attempting to connect to ${wsUrl}`);
+  // WebSocket connection handler
+  const connectWebSocket = useCallback(() => {
+    if (isConnecting || !ipAddress) return;
+    
+    setIsConnecting(true);
+    const wsUrl = `ws://${ipAddress}`;
+    console.log(`Attempting to connect to ${wsUrl}`);
+    
+    try {
       const socket = new WebSocket(wsUrl);
-
+      
       socket.onopen = () => {
         console.log('WebSocket connection established');
         setIsConnected(true);
-        connectionAttempts = 0;
+        setIsConnecting(false);
         showToast({
           title: "Connected",
           description: `Connected to pump controller at ${ipAddress}`
         });
       };
-
+      
       socket.onclose = (event) => {
         console.log('WebSocket connection closed:', event);
         setIsConnected(false);
+        setIsConnecting(false);
         setSystemOn(false);
         setMotorRunning(false);
         
-        if (connectionAttempts < MAX_RECONNECT_ATTEMPTS) {
-          connectionAttempts++;
-          showToast({
-            variant: "destructive",
-            title: "Connection Lost",
-            description: `Attempting to reconnect (${connectionAttempts}/${MAX_RECONNECT_ATTEMPTS})...`
-          });
-          reconnectTimer = setTimeout(connectWebSocket, RECONNECT_DELAY);
-        } else {
-          showToast({
-            variant: "destructive",
-            title: "Connection Failed",
-            description: "Maximum reconnection attempts reached. Please check:\n1. ESP32 is powered on\n2. Connected to same network\n3. IP address is correct"
-          });
-        }
+        showToast({
+          variant: "destructive",
+          title: "Connection Lost",
+          description: "Connection to pump controller lost. Will try to reconnect..."
+        });
       };
-
+      
+      socket.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        setIsConnecting(false);
+        showToast({
+          variant: "destructive",
+          title: "Connection Error",
+          description: "Failed to connect. Please check:\n1. ESP32 is powered on\n2. Connected to same network\n3. IP address is correct"
+        });
+      };
+      
       socket.onmessage = (event) => {
         try {
           console.log('Received WebSocket message:', event.data);
@@ -230,33 +230,42 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
           handleWebSocketMessage(data);
         } catch (error) {
           console.error('Failed to parse WebSocket message:', error);
-          showToast({
-            variant: "destructive",
-            title: "Error",
-            description: "Failed to parse server message"
-          });
         }
       };
-
-      socket.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        showToast({
-          variant: "destructive",
-          title: "Connection Error",
-          description: "Failed to connect. Please check network settings and ESP32 status."
-        });
-      };
-
+      
       setWs(socket);
-    };
-
-    connectWebSocket();
-
+      
+    } catch (error) {
+      console.error('Failed to create WebSocket connection:', error);
+      setIsConnecting(false);
+      showToast({
+        variant: "destructive",
+        title: "Connection Error",
+        description: "Failed to create WebSocket connection"
+      });
+    }
+  }, [ipAddress, isConnecting]);
+  
+  // Auto reconnect effect
+  useEffect(() => {
+    let reconnectTimer: NodeJS.Timeout;
+    
+    if (!isConnected && !isConnecting) {
+      reconnectTimer = setTimeout(connectWebSocket, 5000);
+    }
+    
     return () => {
-      console.log('Cleaning up WebSocket connection');
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
       }
+    };
+  }, [isConnected, isConnecting, connectWebSocket]);
+  
+  // Initial connection effect
+  useEffect(() => {
+    connectWebSocket();
+    
+    return () => {
       if (ws?.readyState === WebSocket.OPEN) {
         ws.close();
       }
@@ -535,6 +544,7 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
     ipAddress,
     setIpAddress,
     isConnected,
+    isConnecting,
     connect,
     disconnect,
     systemOn,

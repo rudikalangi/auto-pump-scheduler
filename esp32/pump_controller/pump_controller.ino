@@ -21,10 +21,11 @@ const int MOTOR_RELAY = 27;         // Relay 2 untuk starter motor
 // Constants
 const unsigned long WATCHDOG_TIMEOUT = 30000;  // 30 detik timeout
 const int EEPROM_SIZE = 512;
-const int MAX_RETRY_WIFI = 20;  // Maksimum percobaan koneksi WiFi
+const int MAX_RETRY_WIFI = 20;      // Maksimum percobaan koneksi WiFi
 const int RELAY_STABILIZE_DELAY = 500;  // Delay untuk stabilisasi relay (ms)
 const int MOTOR_START_DURATION = 2000;   // Durasi starter motor (ms)
 const int POWER_ON_DELAY = 1000;        // Delay setelah power on sebelum operasi lain
+const int WIFI_RECONNECT_DELAY = 5000;  // Delay sebelum mencoba koneksi ulang WiFi
 
 // LoRa configuration
 const long LORA_FREQUENCY = 433E6;  // Frekuensi LoRa (433 MHz)
@@ -39,6 +40,7 @@ bool motorStarting = false;    // Status starter motor (Relay 2)
 bool motorRunning = false;     // Status motor sudah running
 unsigned long motorStartTime = 0; // Waktu mulai starter
 unsigned long lastWatchdog = 0;
+unsigned long lastWifiCheck = 0;
 unsigned long lastStateUpdate = 0;
 float remoteMoisture = 0.0;
 unsigned long lastRemoteUpdate = 0;
@@ -112,24 +114,18 @@ void controlMotor(bool turnOn) {
   broadcastState();
 }
 
-void setup() {
-  Serial.begin(115200);
-  
-  // Initialize pins
-  pinMode(SYSTEM_POWER_RELAY, OUTPUT);
-  pinMode(MOTOR_RELAY, OUTPUT);
-  
-  // Set initial relay states (Inactive LOW)
-  digitalWrite(SYSTEM_POWER_RELAY, LOW);
-  digitalWrite(MOTOR_RELAY, LOW);
-  delay(RELAY_STABILIZE_DELAY);
-  
-  EEPROM.begin(EEPROM_SIZE);
-  
-  // Initialize WiFi with more detailed logging
-  WiFi.begin(ssid, password);
-  Serial.println("\nMenghubungkan ke WiFi...");
+// Fungsi untuk memeriksa dan menghubungkan WiFi
+bool connectWiFi() {
+  if (WiFi.status() == WL_CONNECTED) {
+    return true;
+  }
+
+  Serial.println("\nMencoba menghubungkan ke WiFi...");
   Serial.printf("SSID: %s\n", ssid);
+  
+  WiFi.disconnect();
+  delay(1000);
+  WiFi.begin(ssid, password);
   
   int attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts < MAX_RETRY_WIFI) {
@@ -139,6 +135,14 @@ void setup() {
     
     if (attempts % 5 == 0) {
       Serial.printf("\nPercobaan ke-%d, Status WiFi: %d\n", attempts, WiFi.status());
+      
+      // Reset WiFi jika gagal setelah beberapa percobaan
+      if (attempts == 15) {
+        Serial.println("Mereset koneksi WiFi...");
+        WiFi.disconnect(true);
+        delay(1000);
+        WiFi.begin(ssid, password);
+      }
     }
   }
   
@@ -150,14 +154,33 @@ void setup() {
     Serial.printf("DNS: %s\n", WiFi.dnsIP().toString().c_str());
     Serial.printf("Channel: %d\n", WiFi.channel());
     Serial.printf("RSSI: %d dBm\n", WiFi.RSSI());
-    
-    // Start WebSocket server with debug info
+    return true;
+  } else {
+    Serial.println("\nGagal terhubung ke WiFi!");
+    return false;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  
+  // Initialize pins
+  pinMode(SYSTEM_POWER_RELAY, OUTPUT);
+  pinMode(MOTOR_RELAY, OUTPUT);
+  
+  // Set initial relay states (Inactive LOW for active HIGH relays)
+  digitalWrite(SYSTEM_POWER_RELAY, LOW);
+  digitalWrite(MOTOR_RELAY, LOW);
+  delay(RELAY_STABILIZE_DELAY);
+  
+  EEPROM.begin(EEPROM_SIZE);
+  
+  // Connect to WiFi
+  if (connectWiFi()) {
+    // Start WebSocket server
     webSocket.begin();
     webSocket.onEvent(webSocketEvent);
     Serial.println("WebSocket server started on port 80");
-  } else {
-    Serial.println("\nGagal terhubung ke WiFi!");
-    Serial.printf("Status WiFi terakhir: %d\n", WiFi.status());
   }
   
   // Initialize LoRa
@@ -282,17 +305,23 @@ void broadcastState() {
 }
 
 void loop() {
-  webSocket.loop();
-  
   // Monitor WiFi connection
-  static unsigned long lastWiFiCheck = 0;
-  if (millis() - lastWiFiCheck > 5000) {  // Check every 5 seconds
-    lastWiFiCheck = millis();
+  if (millis() - lastWifiCheck > WIFI_RECONNECT_DELAY) {
+    lastWifiCheck = millis();
     
     if (WiFi.status() != WL_CONNECTED) {
       Serial.println("WiFi terputus! Mencoba menghubungkan kembali...");
-      WiFi.reconnect();
+      if (connectWiFi()) {
+        // Restart WebSocket server setelah koneksi ulang
+        webSocket.begin();
+        Serial.println("WebSocket server direstart");
+      }
     }
+  }
+  
+  // WebSocket loop hanya jika WiFi terhubung
+  if (WiFi.status() == WL_CONNECTED) {
+    webSocket.loop();
   }
   
   // Check for LoRa packets
