@@ -8,7 +8,7 @@ const HEARTBEAT_INTERVAL = 30000; // 30 detik
 const RECONNECT_DELAY = 3000; // 3 detik
 const MAX_RECONNECT_ATTEMPTS = 5;
 const WS_CLOSE_NORMAL = 1000;
-const DEFAULT_IP = '192.168.1.100';
+const DEFAULT_IP = '10.33.83.130'; // Updated default IP
 
 // Tipe untuk pesan WebSocket
 interface WSMessage {
@@ -197,135 +197,118 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
   
   // Fungsi untuk connect
   const connect = useCallback(async () => {
-    if (ws?.readyState === WebSocket.OPEN) return;
-
+    if (isConnecting || isConnected) return;
+    
     try {
       setIsConnecting(true);
       
-      if (reconnectAttempts.current >= MAX_RECONNECT_ATTEMPTS) {
-        addLogEntry('Connection', 'Max reconnection attempts reached', 'error');
-        showToast({
-          variant: "destructive",
-          title: "Connection Error",
-          description: "Max reconnection attempts reached. Please check your connection."
-        });
-        setIsConnecting(false);
-        return;
+      if (wsRef.current) {
+        wsRef.current.close(WS_CLOSE_NORMAL);
       }
       
-      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
-      const newWs = new WebSocket(wsUrl);
-      wsRef.current = newWs;
+      const newWs = new WebSocket(`ws://${ipAddress}/ws`);
       
       newWs.onopen = () => {
-        if (newWs !== wsRef.current) return;
-        
+        console.log('Connected to ESP32');
         setIsConnected(true);
         setIsConnecting(false);
         reconnectAttempts.current = 0;
-        startHeartbeat();
         
-        // Request initial state
-        safeSend({ type: 'getState' });
-        addLogEntry('Connection', `Connected to ${wsUrl}`, 'info');
-      };
-      
-      newWs.onmessage = (event) => {
-        if (newWs !== wsRef.current) return;
+        // Send initial ping
+        newWs.send(JSON.stringify({ command: 'ping' }));
         
-        try {
-          const data = JSON.parse(event.data);
-          
-          switch (data.type) {
-            case 'state':
-              if (typeof data.systemOn === 'boolean') setSystemOn(data.systemOn);
-              if (typeof data.motorRunning === 'boolean') setMotorRunning(data.motorRunning);
-              if (typeof data.relayOn === 'boolean') setRelayOn(data.relayOn);
-              break;
-              
-            case 'moisture':
-              if (typeof data.value === 'number' && !isNaN(data.value)) {
-                const timestamp = Date.now();
-                setRemoteMoisture(data.value);
-                setLastRemoteUpdate(timestamp);
-                
-                setMoistureHistory(prev => {
-                  const newHistory = [...prev, { timestamp, value: data.value }];
-                  return newHistory.slice(-MAX_HISTORY_POINTS);
-                });
-              }
-              break;
-              
-            case 'pong':
-              break;
-              
-            case 'error':
-              console.error('Server error:', data.message);
-              addLogEntry('Error', `Server error: ${data.message}`, 'error');
-              showToast({
-                variant: "destructive",
-                title: "Server Error",
-                description: data.message || 'Unknown server error'
-              });
-              break;
-              
-            default:
-              console.warn('Unknown message type:', data.type);
+        // Start heartbeat
+        heartbeatTimer.current = setInterval(() => {
+          if (newWs.readyState === WebSocket.OPEN) {
+            newWs.send(JSON.stringify({ command: 'ping' }));
           }
-        } catch (error) {
-          console.error('WebSocket message parse error:', error);
-          addLogEntry('Error', 'Failed to parse server message', 'error');
-        }
+        }, HEARTBEAT_INTERVAL);
+        
+        showToast({
+          title: "Connected",
+          description: `Successfully connected to ESP32 at ${ipAddress}`,
+        });
       };
       
-      newWs.onclose = (event) => {
-        if (newWs !== wsRef.current) return;
-        
+      newWs.onclose = () => {
+        console.log('Disconnected from ESP32');
         setIsConnected(false);
-        setWs(null);
+        setIsConnecting(false);
         
+        // Clear heartbeat timer
         if (heartbeatTimer.current) {
           clearInterval(heartbeatTimer.current);
-          heartbeatTimer.current = undefined;
         }
         
-        if (!event.wasClean && reconnectAttempts.current < MAX_RECONNECT_ATTEMPTS) {
+        // Attempt reconnect if not manually closed
+        if (reconnectAttempts.current < MAX_RECONNECT_ATTEMPTS) {
           reconnectAttempts.current++;
-          addLogEntry(
-            'Connection',
-            `Connection lost (attempt ${reconnectAttempts.current}/${MAX_RECONNECT_ATTEMPTS})`,
-            'warning'
-          );
-          reconnectTimer.current = setTimeout(connect, RECONNECT_DELAY);
+          reconnectTimer.current = setTimeout(() => {
+            connect();
+          }, RECONNECT_DELAY);
+          
+          showToast({
+            title: "Disconnected",
+            description: `Lost connection to ESP32. Attempt ${reconnectAttempts.current}/${MAX_RECONNECT_ATTEMPTS}...`,
+            variant: "destructive"
+          });
         }
       };
       
       newWs.onerror = (error) => {
-        if (newWs !== wsRef.current) return;
-        
         console.error('WebSocket error:', error);
-        addLogEntry('Error', 'Connection error occurred', 'error');
         showToast({
-          variant: "destructive",
           title: "Connection Error",
-          description: "Failed to connect to pump controller"
+          description: "Failed to connect to ESP32",
+          variant: "destructive"
         });
       };
       
+      newWs.onmessage = (event) => {
+        try {
+          const message: WSMessage = JSON.parse(event.data);
+          console.log('Received message:', message);
+          
+          switch (message.type) {
+            case 'pong':
+              console.log('Received pong');
+              break;
+              
+            case 'status':
+              if (message.data) {
+                setSystemOn(message.data.system_power);
+                setMotorRunning(message.data.motor);
+                setRemoteMoisture(message.data.moisture || 0);
+                setLastRemoteUpdate(Date.now());
+              }
+              break;
+              
+            case 'error':
+              showToast({
+                title: "Error",
+                description: message.message || "Unknown error occurred",
+                variant: "destructive"
+              });
+              break;
+          }
+        } catch (error) {
+          console.error('Error parsing message:', error);
+        }
+      };
+      
+      wsRef.current = newWs;
       setWs(newWs);
       
     } catch (error) {
-      console.error('WebSocket connection error:', error);
+      console.error('Connection error:', error);
       setIsConnecting(false);
-      addLogEntry('Error', 'Failed to establish connection', 'error');
-      
-      if (reconnectAttempts.current < MAX_RECONNECT_ATTEMPTS) {
-        reconnectAttempts.current++;
-        reconnectTimer.current = setTimeout(connect, RECONNECT_DELAY);
-      }
+      showToast({
+        title: "Connection Error",
+        description: "Failed to establish connection",
+        variant: "destructive"
+      });
     }
-  }, [addLogEntry, showToast, startHeartbeat, safeSend]);
+  }, [ipAddress, isConnecting, isConnected, showToast]);
   
   // Effect untuk cleanup
   useEffect(() => {
