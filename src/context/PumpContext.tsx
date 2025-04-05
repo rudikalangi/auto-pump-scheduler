@@ -164,11 +164,9 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
   
   // Fungsi untuk disconnect
   const disconnect = useCallback(() => {
-    reconnectAttempts.current = MAX_RECONNECT_ATTEMPTS; // Prevent auto-reconnect
-    
-    if (reconnectTimer.current) {
-      clearTimeout(reconnectTimer.current);
-      reconnectTimer.current = undefined;
+    if (wsRef.current) {
+      wsRef.current.close(WS_CLOSE_NORMAL);
+      wsRef.current = null;
     }
     
     if (heartbeatTimer.current) {
@@ -176,25 +174,16 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
       heartbeatTimer.current = undefined;
     }
     
-    if (ws) {
-      try {
-        ws.close(WS_CLOSE_NORMAL, 'Manual disconnect');
-      } catch (error) {
-        console.error('Error closing WebSocket:', error);
-      }
+    if (reconnectTimer.current) {
+      clearTimeout(reconnectTimer.current);
+      reconnectTimer.current = undefined;
     }
     
-    wsRef.current = null;
-    setWs(null);
     setIsConnected(false);
     setIsConnecting(false);
-    setSystemOn(false);
-    setMotorRunning(false);
-    setRelayOn(false);
-    
-    addLogEntry('Connection', 'Manually disconnected', 'info');
-  }, [ws, addLogEntry]);
-  
+    reconnectAttempts.current = 0;
+  }, []);
+
   // Fungsi untuk connect
   const connect = useCallback(async () => {
     if (isConnecting || isConnected) return;
@@ -310,35 +299,22 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [ipAddress, isConnecting, isConnected, showToast]);
   
+  // Effect untuk IP address
+  useEffect(() => {
+    localStorage.setItem('pumpIpAddress', ipAddress);
+  }, [ipAddress]);
+
   // Effect untuk cleanup
   useEffect(() => {
     return () => {
-      if (reconnectTimer.current) {
-        clearTimeout(reconnectTimer.current);
-      }
-      if (heartbeatTimer.current) {
-        clearInterval(heartbeatTimer.current);
-      }
-      if (ws) {
-        try {
-          ws.close(WS_CLOSE_NORMAL);
-        } catch (error) {
-          console.error('Error closing WebSocket on cleanup:', error);
-        }
-      }
-      wsRef.current = null;
+      disconnect();
     };
-  }, [ws]);
+  }, [disconnect]);
   
   // Effect untuk menyimpan schedules
   useEffect(() => {
     localStorage.setItem('pumpSchedules', JSON.stringify(schedules));
   }, [schedules]);
-  
-  // Effect untuk menyimpan IP address
-  useEffect(() => {
-    localStorage.setItem('pumpIpAddress', ipAddress);
-  }, [ipAddress]);
   
   // Pump control functions
   const toggleSystem = useCallback(async () => {

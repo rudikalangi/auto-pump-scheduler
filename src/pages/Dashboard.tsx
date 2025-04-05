@@ -6,6 +6,7 @@ import { Power, Droplet, AlertTriangle } from 'lucide-react';
 import StatusCard from '@/components/StatusCard';
 import MoistureChart from '@/components/MoistureChart';
 import ESP32Connection from '@/components/ESP32Connection';
+import NetworkSettings from '@/components/NetworkSettings';
 
 const Dashboard = () => {
   const {
@@ -34,6 +35,9 @@ const Dashboard = () => {
       
       {/* Connection Status */}
       <ESP32Connection />
+      
+      {/* Network Settings */}
+      <NetworkSettings />
       
       {/* System Controls */}
       <Card className="p-6">
