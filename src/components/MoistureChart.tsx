@@ -1,4 +1,5 @@
 import React from 'react';
+import { Line } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -7,11 +8,13 @@ import {
   LineElement,
   Title,
   Tooltip,
-  Legend
+  Legend,
+  Filler
 } from 'chart.js';
-import { Line } from 'react-chartjs-2';
 import { usePump } from '@/context/PumpContext';
+import { Card } from '@/components/ui/card';
 
+// Register ChartJS components
 ChartJS.register(
   CategoryScale,
   LinearScale,
@@ -19,99 +22,90 @@ ChartJS.register(
   LineElement,
   Title,
   Tooltip,
-  Legend
+  Legend,
+  Filler
 );
 
 const MoistureChart: React.FC = () => {
-  const { moistureHistory } = usePump();
+  const { moistureHistory, remoteMoisture } = usePump();
+  
+  const data = {
+    labels: moistureHistory.map(h => new Date(h.timestamp).toLocaleTimeString()),
+    datasets: [
+      {
+        label: 'Moisture Level',
+        data: moistureHistory.map(h => h.value),
+        fill: true,
+        backgroundColor: 'rgba(75, 192, 192, 0.2)',
+        borderColor: 'rgba(75, 192, 192, 1)',
+        borderWidth: 2,
+        pointRadius: 3,
+        pointBackgroundColor: 'rgba(75, 192, 192, 1)',
+        tension: 0.4
+      }
+    ]
+  };
   
   const options = {
     responsive: true,
     maintainAspectRatio: false,
+    animation: {
+      duration: 0 // Disable animation for better real-time performance
+    },
     plugins: {
       legend: {
-        position: 'top' as const,
+        display: false
       },
       title: {
         display: true,
-        text: 'Soil Moisture History',
-        font: {
-          size: 16,
-          weight: 'bold' as 'bold'
+        text: `Current Moisture Level: ${remoteMoisture}%`,
+        padding: {
+          top: 10,
+          bottom: 30
         }
       },
-    },
-    scales: {
-      y: {
-        min: 0,
-        max: 100,
-        title: {
-          display: true,
-          text: 'Moisture (%)'
-        },
-        grid: {
-          color: 'rgba(0, 0, 0, 0.1)'
-        }
-      },
-      x: {
-        title: {
-          display: true,
-          text: 'Time'
-        },
-        grid: {
-          color: 'rgba(0, 0, 0, 0.1)'
-        },
-        ticks: {
-          maxRotation: 45,
-          minRotation: 45
+      tooltip: {
+        mode: 'index' as const,
+        intersect: false,
+        callbacks: {
+          label: (context: any) => `Moisture: ${context.parsed.y}%`
         }
       }
     },
-    animation: {
-      duration: 0 // Disable animation for real-time updates
+    scales: {
+      x: {
+        grid: {
+          display: false
+        },
+        ticks: {
+          maxTicksLimit: 8,
+          maxRotation: 0
+        }
+      },
+      y: {
+        beginAtZero: true,
+        max: 100,
+        ticks: {
+          stepSize: 20,
+          callback: (value: number) => `${value}%`
+        },
+        grid: {
+          color: 'rgba(0, 0, 0, 0.1)'
+        }
+      }
     },
     interaction: {
       intersect: false,
       mode: 'index' as const
     }
   };
-
-  // Ensure we have data before rendering
-  if (!moistureHistory || moistureHistory.length === 0) {
-    return (
-      <div className="w-full h-[400px] bg-white rounded-lg shadow p-4 flex items-center justify-center">
-        <p className="text-gray-500">No moisture data available</p>
-      </div>
-    );
-  }
-
-  const data = {
-    labels: moistureHistory.map(point => 
-      new Date(point.timestamp).toLocaleTimeString('en-US', {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false
-      })
-    ),
-    datasets: [
-      {
-        label: 'Soil Moisture',
-        data: moistureHistory.map(point => Number(point.value.toFixed(1))),
-        borderColor: 'rgb(75, 192, 192)',
-        backgroundColor: 'rgba(75, 192, 192, 0.5)',
-        tension: 0.3,
-        pointRadius: 3,
-        pointHoverRadius: 5,
-        fill: true
-      }
-    ]
-  };
-
+  
   return (
-    <div className="w-full h-[400px] bg-white rounded-lg shadow p-4">
-      <Line options={options} data={data} />
-    </div>
+    <Card className="p-4">
+      <div className="h-[300px]">
+        <Line data={data} options={options} />
+      </div>
+    </Card>
   );
 };
 
