@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { cn } from '@/lib/utils';
 
@@ -7,6 +6,7 @@ interface StatusCardProps {
   value: string | number;
   icon: React.ReactNode;
   status?: 'normal' | 'warning' | 'error' | 'success';
+  subtitle?: string;
   className?: string;
 }
 
@@ -15,6 +15,7 @@ const StatusCard: React.FC<StatusCardProps> = ({
   value,
   icon,
   status = 'normal',
+  subtitle,
   className,
 }) => {
   const getStatusClass = () => {
@@ -53,6 +54,9 @@ const StatusCard: React.FC<StatusCardProps> = ({
         <div>
           <h3 className="font-medium text-gray-700">{title}</h3>
           <p className="mt-2 text-2xl font-semibold text-gray-900">{value}</p>
+          {subtitle && (
+            <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
+          )}
         </div>
         <div className={cn(
           'p-2 rounded-full',
@@ -65,4 +69,5 @@ const StatusCard: React.FC<StatusCardProps> = ({
   );
 };
 
+export type { StatusCardProps };
 export default StatusCard;

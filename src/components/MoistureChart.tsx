@@ -27,7 +27,16 @@ ChartJS.register(
 );
 
 const MoistureChart: React.FC = () => {
-  const { moistureHistory, remoteMoisture } = usePump();
+  const { moistureHistory = [], remoteMoisture = 0 } = usePump();
+
+  // If no data, show placeholder
+  if (moistureHistory.length === 0) {
+    return (
+      <div className="h-[300px] flex items-center justify-center text-muted-foreground">
+        No moisture data available
+      </div>
+    );
+  }
   
   const data = {
     labels: moistureHistory.map(h => new Date(h.timestamp).toLocaleTimeString()),
@@ -58,7 +67,7 @@ const MoistureChart: React.FC = () => {
       },
       title: {
         display: true,
-        text: `Current Moisture Level: ${remoteMoisture}%`,
+        text: `Current Moisture Level: ${remoteMoisture.toFixed(1)}%`,
         padding: {
           top: 10,
           bottom: 30
@@ -68,7 +77,7 @@ const MoistureChart: React.FC = () => {
         mode: 'index' as const,
         intersect: false,
         callbacks: {
-          label: (context: any) => `Moisture: ${context.parsed.y}%`
+          label: (context: any) => `Moisture: ${context.parsed.y.toFixed(1)}%`
         }
       }
     },
@@ -99,10 +108,10 @@ const MoistureChart: React.FC = () => {
       mode: 'index' as const
     }
   };
-  
+
   return (
     <Card className="p-4">
-      <div className="h-[300px]">
+      <div className="h-[400px]">
         <Line data={data} options={options} />
       </div>
     </Card>

@@ -17,6 +17,29 @@ type ConnectionCallback = (connected: boolean) => void;
 let statusCallback: StatusCallback | null = null;
 let connectionCallback: ConnectionCallback | null = null;
 
+// Send a command to the ESP32
+const sendCommand = (command: string, params: Record<string, any> = {}) => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    console.error('WebSocket is not connected');
+    return false;
+  }
+
+  try {
+    const message = {
+      type: 'command',
+      command,
+      ...params
+    };
+    
+    console.log('Sending command:', message);
+    ws.send(JSON.stringify(message));
+    return true;
+  } catch (error) {
+    console.error('Failed to send command:', error);
+    return false;
+  }
+};
+
 /**
  * Set the ESP32 controller IP address and connect WebSocket
  * @param ip - IP address of the ESP32
@@ -37,34 +60,44 @@ export const connectToEsp32 = (ip: string) => {
     reconnectTimer = null;
   }
 
+  console.log('Connecting to ESP32 at:', ip);
+  
   // Create new WebSocket connection
-  ws = new WebSocket(`ws://${ip}/ws`);
+  ws = new WebSocket(`ws://${ip}`); 
 
   ws.onopen = () => {
     console.log('Connected to ESP32');
     isConnecting = false;
     if (connectionCallback) connectionCallback(true);
     
-    // Get initial network settings
-    sendCommand('getnetwork');
+    // Get initial status
+    sendCommand('getStatus');
   };
 
-  ws.onclose = () => {
-    console.log('Disconnected from ESP32');
+  ws.onclose = (event) => {
+    console.log('Disconnected from ESP32:', event.code, event.reason);
     isConnecting = false;
     if (connectionCallback) connectionCallback(false);
+    ws = null;
     
-    // Try to reconnect after 5 seconds
-    reconnectTimer = setTimeout(() => {
-      connectToEsp32(ip);
-    }, 5000);
+    // Try to reconnect after 3 seconds
+    if (!reconnectTimer) {
+      reconnectTimer = setTimeout(() => {
+        console.log('Attempting to reconnect...');
+        connectToEsp32(ip);
+      }, 3000);
+    }
   };
 
   ws.onerror = (error) => {
     console.error('WebSocket error:', error);
+    isConnecting = false;
+    if (ws) ws.close();
+    ws = null;
+    
     toast({
       title: "Connection Error",
-      description: "Failed to connect to ESP32. Retrying...",
+      description: "Failed to connect to ESP32. Check if the device is powered on and connected to the network.",
       variant: "destructive"
     });
   };
@@ -72,125 +105,43 @@ export const connectToEsp32 = (ip: string) => {
   ws.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
+      console.log('Received message:', data);
       
-      // Handle different message types
-      switch (data.type) {
-        case 'status':
-          if (statusCallback) statusCallback(data);
-          break;
-          
-        case 'pong':
-          console.log('Received pong from ESP32');
-          break;
-          
-        case 'network':
-          if (data.status === 'error') {
-            toast({
-              title: "Network Error",
-              description: data.message,
-              variant: "destructive"
-            });
-          } else if (data.status === 'success') {
-            toast({
-              title: "Network Updated",
-              description: data.message
-            });
-          }
-          break;
-          
-        default:
-          console.log('Received message:', data);
+      if (data.type === 'status' && statusCallback) {
+        statusCallback(data);
       }
     } catch (error) {
-      console.error('Error parsing message:', error);
+      console.error('Failed to parse message:', error);
     }
   };
 };
 
-/**
- * Send a command to the ESP32
- * @param command - Command to send
- * @param params - Additional parameters
- */
-export const sendCommand = (command: string, params: Record<string, any> = {}) => {
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    toast({
-      title: "Connection Error",
-      description: "Not connected to ESP32",
-      variant: "destructive"
-    });
-    return;
-  }
-
-  try {
-    ws.send(JSON.stringify({
-      command,
-      ...params
-    }));
-  } catch (error) {
-    console.error('Error sending command:', error);
-    toast({
-      title: "Error",
-      description: "Failed to send command to ESP32",
-      variant: "destructive"
-    });
-  }
-};
-
-/**
- * Register callback for status updates
- * @param callback - Function to call when status is received
- */
+// Register callback for status updates
 export const onStatus = (callback: StatusCallback) => {
   statusCallback = callback;
 };
 
-/**
- * Register callback for connection state changes
- * @param callback - Function to call when connection state changes
- */
+// Register callback for connection state changes
 export const onConnection = (callback: ConnectionCallback) => {
   connectionCallback = callback;
 };
 
-/**
- * Update network settings
- * @param ip - New IP address
- * @param gateway - New gateway address
- * @param dns - New DNS server address
- */
-export const updateNetwork = (ip: string, gateway: string, dns: string) => {
-  sendCommand('network', { ip, gateway, dns });
+// Control system power
+export const toggleSystem = () => {
+  return sendCommand('toggleSystem');
 };
 
-/**
- * Control system power
- * @param on - True to turn on, false to turn off
- */
-export const controlPower = (on: boolean) => {
-  sendCommand('power', { value: on });
+// Control motor
+export const toggleMotor = () => {
+  return sendCommand('toggleMotor');
 };
 
-/**
- * Control motor
- * @param on - True to turn on, false to turn off
- */
-export const controlMotor = (on: boolean) => {
-  sendCommand('motor', { value: on });
+// Emergency stop
+export const stopAll = () => {
+  return sendCommand('stopAll');
 };
 
-/**
- * Emergency stop
- */
-export const emergencyStop = () => {
-  sendCommand('emergency');
-};
-
-/**
- * Update moisture thresholds
- * @param low - Low threshold (0-100)
- * @param high - High threshold (0-100)
- */
-export const updateThresholds = (low: number, high: number) => {
-  sendCommand('threshold', { low, high });
+// Get current status
+export const getStatus = () => {
+  return sendCommand('getStatus');
 };

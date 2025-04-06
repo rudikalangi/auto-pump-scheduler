@@ -1,12 +1,12 @@
 import React from 'react';
 import { usePump } from '@/context/PumpContext';
 import { Card } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
 import { Power, Droplet, AlertTriangle } from 'lucide-react';
 import StatusCard from '@/components/StatusCard';
 import MoistureChart from '@/components/MoistureChart';
 import ESP32Connection from '@/components/ESP32Connection';
 import NetworkSettings from '@/components/NetworkSettings';
+import ControlButton from '@/components/ControlButton';
 
 const Dashboard = () => {
   const {
@@ -43,32 +43,31 @@ const Dashboard = () => {
       <Card className="p-6">
         <h2 className="text-xl font-semibold mb-4">System Controls</h2>
         <div className="flex flex-wrap gap-4">
-          <Button
-            variant={systemOn ? "default" : "outline"}
+          <ControlButton
+            label={systemOn ? "Turn Off System" : "Turn On System"}
+            icon={<Power className="h-6 w-6" />}
             onClick={toggleSystem}
+            variant="power"
+            isActive={systemOn}
             disabled={!isConnected}
-          >
-            <Power className="mr-2 h-4 w-4" />
-            {systemOn ? "Turn Off System" : "Turn On System"}
-          </Button>
+          />
           
-          <Button
-            variant={motorRunning ? "default" : "outline"}
+          <ControlButton
+            label={motorRunning ? "Stop Motor" : "Start Motor"}
+            icon={<Droplet className="h-6 w-6" />}
             onClick={motorRunning ? stopMotor : startMotor}
+            variant="starter"
+            isActive={motorRunning}
             disabled={!isConnected || !systemOn}
-          >
-            <Droplet className="mr-2 h-4 w-4" />
-            {motorRunning ? "Stop Motor" : "Start Motor"}
-          </Button>
+          />
           
-          <Button
-            variant="destructive"
+          <ControlButton
+            label="Emergency Stop"
+            icon={<AlertTriangle className="h-6 w-6" />}
             onClick={stopAll}
+            variant="stop"
             disabled={!isConnected}
-          >
-            <AlertTriangle className="mr-2 h-4 w-4" />
-            Emergency Stop
-          </Button>
+          />
         </div>
       </Card>
       
@@ -90,9 +89,10 @@ const Dashboard = () => {
         
         <StatusCard
           title="Moisture Level"
-          value={`${remoteMoisture.toFixed(1)}%`}
+          value={`${(remoteMoisture || 0).toFixed(1)}%`}
+          subtitle={getTimeSinceUpdate()}
           icon={<Droplet className="h-6 w-6" />}
-          status={remoteMoisture < 30 ? "warning" : "normal"}
+          status={(remoteMoisture || 0) < 30 ? "warning" : "normal"}
         />
       </div>
       
@@ -100,8 +100,8 @@ const Dashboard = () => {
       <Card className="p-6">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-semibold">Moisture History</h2>
-          <span className="text-sm text-gray-500">
-            Last update: {getTimeSinceUpdate()}
+          <span className="text-sm text-muted-foreground">
+            Last updated: {getTimeSinceUpdate()}
           </span>
         </div>
         <MoistureChart />
