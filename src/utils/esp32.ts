@@ -3,145 +3,181 @@
  * This module provides functions to communicate with the ESP32 controller via WebSocket
  */
 
-import { toast } from '@/components/ui/use-toast';
+import { toast } from "@/components/ui/use-toast";
 
-// WebSocket instance
 let ws: WebSocket | null = null;
-let reconnectTimer: NodeJS.Timeout | null = null;
-let isConnecting = false;
+let statusCallback: ((status: any) => void) | null = null;
+let connectionCallback: ((connected: boolean) => void) | null = null;
+let reconnectTimeout: NodeJS.Timeout | null = null;
+let lastActivity = 0;
 
-// Callback functions
-type StatusCallback = (status: any) => void;
-type ConnectionCallback = (connected: boolean) => void;
-
-let statusCallback: StatusCallback | null = null;
-let connectionCallback: ConnectionCallback | null = null;
-
-// Send a command to the ESP32
-const sendCommand = (command: string, params: Record<string, any> = {}) => {
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    console.error('WebSocket is not connected');
-    return false;
-  }
-
-  try {
-    const message = {
-      type: 'command',
-      command,
-      ...params
-    };
-    
-    console.log('Sending command:', message);
-    ws.send(JSON.stringify(message));
-    return true;
-  } catch (error) {
-    console.error('Failed to send command:', error);
-    return false;
-  }
+export const onStatus = (callback: (status: any) => void) => {
+  statusCallback = callback;
 };
 
-/**
- * Set the ESP32 controller IP address and connect WebSocket
- * @param ip - IP address of the ESP32
- */
-export const connectToEsp32 = (ip: string) => {
-  if (isConnecting) return;
-  isConnecting = true;
+export const onConnection = (callback: (connected: boolean) => void) => {
+  connectionCallback = callback;
+};
 
-  // Close existing connection if any
+const handleClose = () => {
+  console.log('WebSocket closed');
+  if (connectionCallback) {
+    connectionCallback(false);
+  }
+  ws = null;
+  
+  toast({
+    title: "Disconnected",
+    description: "Lost connection to ESP32",
+    variant: "destructive"
+  });
+};
+
+const handleError = (error: Event) => {
+  console.error('WebSocket error:', error);
   if (ws) {
     ws.close();
     ws = null;
   }
-
-  // Clear any existing reconnect timer
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-  }
-
-  console.log('Connecting to ESP32 at:', ip);
   
-  // Create new WebSocket connection
-  ws = new WebSocket(`ws://${ip}`); 
+  toast({
+    title: "Connection Error",
+    description: "WebSocket error occurred",
+    variant: "destructive"
+  });
+};
 
-  ws.onopen = () => {
-    console.log('Connected to ESP32');
-    isConnecting = false;
-    if (connectionCallback) connectionCallback(true);
-    
-    // Get initial status
-    sendCommand('getStatus');
-  };
+const handleMessage = (event: MessageEvent) => {
+  try {
+    const data = JSON.parse(event.data);
+    lastActivity = Date.now();
+    console.log('Received message:', data);
 
-  ws.onclose = (event) => {
-    console.log('Disconnected from ESP32:', event.code, event.reason);
-    isConnecting = false;
-    if (connectionCallback) connectionCallback(false);
-    ws = null;
-    
-    // Try to reconnect after 3 seconds
-    if (!reconnectTimer) {
-      reconnectTimer = setTimeout(() => {
-        console.log('Attempting to reconnect...');
-        connectToEsp32(ip);
-      }, 3000);
+    if (data.type === 'status' && statusCallback) {
+      statusCallback(data);
     }
-  };
-
-  ws.onerror = (error) => {
-    console.error('WebSocket error:', error);
-    isConnecting = false;
-    if (ws) ws.close();
-    ws = null;
-    
+  } catch (error) {
+    console.error('Error parsing message:', error);
     toast({
-      title: "Connection Error",
-      description: "Failed to connect to ESP32. Check if the device is powered on and connected to the network.",
+      title: "Message Error",
+      description: "Failed to parse message from ESP32",
       variant: "destructive"
     });
-  };
+  }
+};
 
-  ws.onmessage = (event) => {
-    try {
-      const data = JSON.parse(event.data);
-      console.log('Received message:', data);
-      
-      if (data.type === 'status' && statusCallback) {
-        statusCallback(data);
+export const connectToEsp32 = (ip: string) => {
+  // Clean up existing connection
+  if (ws) {
+    console.log('Closing existing connection...');
+    ws.close();
+    ws = null;
+  }
+
+  // Clear any existing reconnect timeout
+  if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout);
+    reconnectTimeout = null;
+  }
+
+  try {
+    console.log('Connecting to ESP32:', ip);
+    ws = new WebSocket(`ws://${ip}:80`);
+    lastActivity = Date.now();
+
+    ws.onopen = () => {
+      console.log('WebSocket connected');
+      if (connectionCallback) {
+        connectionCallback(true);
       }
-    } catch (error) {
-      console.error('Failed to parse message:', error);
+      
+      toast({
+        title: "Connected",
+        description: "Successfully connected to ESP32"
+      });
+
+      // Request initial status
+      setTimeout(() => {
+        console.log('Requesting initial status...');
+        sendCommand('getStatus');
+      }, 500); // Small delay to ensure WebSocket is ready
+    };
+
+    ws.onclose = handleClose;
+    ws.onerror = handleError;
+    ws.onmessage = handleMessage;
+
+  } catch (error) {
+    console.error('Connection error:', error);
+    if (connectionCallback) {
+      connectionCallback(false);
     }
-  };
+    
+    toast({
+      title: "Connection Failed",
+      description: "Failed to connect to ESP32",
+      variant: "destructive"
+    });
+  }
 };
 
-// Register callback for status updates
-export const onStatus = (callback: StatusCallback) => {
-  statusCallback = callback;
+const sendCommand = (command: string) => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    console.error('WebSocket not connected');
+    toast({
+      title: "Command Failed",
+      description: "Not connected to ESP32",
+      variant: "destructive"
+    });
+    return;
+  }
+
+  try {
+    const message = JSON.stringify({
+      type: 'command',
+      command: command
+    });
+    
+    console.log('Sending command:', message);
+    ws.send(message);
+    lastActivity = Date.now();
+  } catch (error) {
+    console.error('Error sending command:', error);
+    if (ws) {
+      ws.close();
+      ws = null;
+    }
+    
+    toast({
+      title: "Command Failed",
+      description: "Failed to send command to ESP32",
+      variant: "destructive"
+    });
+  }
 };
 
-// Register callback for connection state changes
-export const onConnection = (callback: ConnectionCallback) => {
-  connectionCallback = callback;
-};
-
-// Control system power
 export const toggleSystem = () => {
-  return sendCommand('toggleSystem');
+  sendCommand('toggleSystem');
 };
 
-// Control motor
 export const toggleMotor = () => {
-  return sendCommand('toggleMotor');
+  sendCommand('toggleMotor');
 };
 
-// Emergency stop
 export const stopAll = () => {
-  return sendCommand('stopAll');
+  sendCommand('stopAll');
 };
 
-// Get current status
-export const getStatus = () => {
-  return sendCommand('getStatus');
+// Clean up function for unmounting
+export const cleanup = () => {
+  if (ws) {
+    ws.close();
+    ws = null;
+  }
+  if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout);
+    reconnectTimeout = null;
+  }
+  statusCallback = null;
+  connectionCallback = null;
 };

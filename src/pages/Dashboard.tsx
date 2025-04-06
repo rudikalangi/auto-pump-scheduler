@@ -1,111 +1,73 @@
 import React from 'react';
-import { usePump } from '@/context/PumpContext';
-import { Card } from '@/components/ui/card';
-import { Power, Droplet, AlertTriangle } from 'lucide-react';
-import StatusCard from '@/components/StatusCard';
-import MoistureChart from '@/components/MoistureChart';
-import ESP32Connection from '@/components/ESP32Connection';
 import NetworkSettings from '@/components/NetworkSettings';
-import ControlButton from '@/components/ControlButton';
+import ESP32Connection from '@/components/ESP32Connection';
+import RemoteSensorCard from '@/components/RemoteSensorCard';
+import MoistureChart from '@/components/MoistureChart';
+import ScheduleManager from '@/components/ScheduleManager';
+import ManualControl from '@/components/ManualControl';
+import { usePump } from '@/context/PumpContext';
+import { Droplet, WifiOff } from 'lucide-react';
 
 const Dashboard = () => {
-  const {
-    systemOn,
-    motorRunning,
-    remoteMoisture,
-    lastRemoteUpdate,
-    toggleSystem,
-    startMotor,
-    stopMotor,
-    stopAll,
-    isConnected,
-  } = usePump();
-
-  const getTimeSinceUpdate = () => {
-    if (!lastRemoteUpdate) return 'No data';
-    const seconds = Math.floor((Date.now() - lastRemoteUpdate) / 1000);
-    if (seconds < 60) return `${seconds}s ago`;
-    const minutes = Math.floor(seconds / 60);
-    return `${minutes}m ago`;
-  };
+  const { isConnected } = usePump();
 
   return (
-    <div className="container mx-auto p-4 space-y-6">
-      <h1 className="text-3xl font-bold mb-6">Dashboard</h1>
-      
-      {/* Connection Status */}
-      <ESP32Connection />
-      
-      {/* Network Settings */}
-      <NetworkSettings />
-      
-      {/* System Controls */}
-      <Card className="p-6">
-        <h2 className="text-xl font-semibold mb-4">System Controls</h2>
-        <div className="flex flex-wrap gap-4">
-          <ControlButton
-            label={systemOn ? "Turn Off System" : "Turn On System"}
-            icon={<Power className="h-6 w-6" />}
-            onClick={toggleSystem}
-            variant="power"
-            isActive={systemOn}
-            disabled={!isConnected}
-          />
-          
-          <ControlButton
-            label={motorRunning ? "Stop Motor" : "Start Motor"}
-            icon={<Droplet className="h-6 w-6" />}
-            onClick={motorRunning ? stopMotor : startMotor}
-            variant="starter"
-            isActive={motorRunning}
-            disabled={!isConnected || !systemOn}
-          />
-          
-          <ControlButton
-            label="Emergency Stop"
-            icon={<AlertTriangle className="h-6 w-6" />}
-            onClick={stopAll}
-            variant="stop"
-            disabled={!isConnected}
-          />
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      {/* Header */}
+      <header className="header-gradient py-4 mb-6">
+        <div className="container mx-auto px-4">
+          <div className="flex items-center justify-between">
+            <h1 className="text-2xl md:text-3xl font-bold flex items-center gap-2">
+              <Droplet className="w-8 h-8" />
+              Auto Pump Scheduler
+            </h1>
+            <div className="flex items-center gap-2">
+              <span className={`status-badge ${isConnected ? 'status-badge-online' : 'status-badge-offline'}`}>
+                {isConnected ? 'Connected' : 'Disconnected'}
+              </span>
+            </div>
+          </div>
         </div>
-      </Card>
-      
-      {/* Status Cards */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <StatusCard
-          title="System Power"
-          value={systemOn ? "ON" : "OFF"}
-          icon={<Power className="h-6 w-6" />}
-          status={systemOn ? "success" : "normal"}
-        />
-        
-        <StatusCard
-          title="Motor Status"
-          value={motorRunning ? "RUNNING" : "STOPPED"}
-          icon={<Droplet className="h-6 w-6" />}
-          status={motorRunning ? "success" : "normal"}
-        />
-        
-        <StatusCard
-          title="Moisture Level"
-          value={`${(remoteMoisture || 0).toFixed(1)}%`}
-          subtitle={getTimeSinceUpdate()}
-          icon={<Droplet className="h-6 w-6" />}
-          status={(remoteMoisture || 0) < 30 ? "warning" : "normal"}
-        />
-      </div>
-      
-      {/* Moisture Chart */}
-      <Card className="p-6">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-semibold">Moisture History</h2>
-          <span className="text-sm text-muted-foreground">
-            Last updated: {getTimeSinceUpdate()}
-          </span>
+      </header>
+
+      {/* Main Content */}
+      <main className="container mx-auto px-4 pb-8">
+        {!isConnected && (
+          <div className="animate-fade-in bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-6 rounded-r-lg">
+            <div className="flex items-center gap-3">
+              <WifiOff className="w-5 h-5 text-yellow-400" />
+              <p className="text-sm text-yellow-700">
+                Not connected to ESP32. Please check your connection settings.
+              </p>
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+          {/* Left Column */}
+          <div className="space-y-6">
+            <NetworkSettings />
+            <ESP32Connection />
+            <ManualControl />
+            <RemoteSensorCard />
+          </div>
+
+          {/* Right Column */}
+          <div className="space-y-6">
+            <ScheduleManager />
+            <MoistureChart />
+          </div>
         </div>
-        <MoistureChart />
-      </Card>
+      </main>
+
+      {/* Footer */}
+      <footer className="bg-white dark:bg-gray-800 border-t py-4 mt-8">
+        <div className="container mx-auto px-4">
+          <p className="text-center text-sm text-gray-600 dark:text-gray-400">
+            Auto Pump Scheduler &copy; {new Date().getFullYear()}
+          </p>
+        </div>
+      </footer>
     </div>
   );
 };

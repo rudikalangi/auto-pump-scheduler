@@ -1,36 +1,42 @@
 #include <WiFi.h>
 #include <WebSocketsServer.h>
 #include <ArduinoJson.h>
+#include <SPI.h>
+#include <LoRa.h>
 
 // Pin definitions
-#define SYSTEM_POWER_RELAY 25
-#define MOTOR_RELAY        26
+#define SYSTEM_POWER_RELAY 26
+#define MOTOR_RELAY 27
+#define LORA_SS 5
+#define LORA_RST 14
+#define LORA_DIO0 2
 
 // WiFi credentials
-const char* ssid = "TAP DLJ";
-const char* password = "tap12345!";
+const char* WIFI_SSID = "TAP DLJ";
+const char* WIFI_PASSWORD = "tap12345!";
+
+// Constants
+const unsigned long STARTER_TIMEOUT = 2000;     // 2 seconds for starter
+const unsigned long MOTOR_RUN_TIME = 2000;     // 2 seconds total run time
+const unsigned long STATUS_INTERVAL = 2000;     // 2 seconds between status broadcasts
 
 // Global variables
 volatile bool systemOn = false;
 volatile bool motorRunning = false;
-bool isWifiConnected = false;
+volatile bool motorStarting = false;
 unsigned long motorStartTime = 0;
-const unsigned long MOTOR_TIMEOUT = 2000; // 2 seconds for motor starter
+unsigned long lastStatus = 0;
+float remoteMoisture = 0.0;
 
-// WebSocket server instance
-WebSocketsServer webSocket = WebSocketsServer(80);
+// WebSocket server on port 81 instead of 80
+WebSocketsServer webSocket = WebSocketsServer(81);
 
-// Initialize WiFi
-bool initWiFi() {
-    if (WiFi.status() == WL_CONNECTED) {
-        WiFi.disconnect(true);
-        delay(1000);
-    }
-    
-    WiFi.mode(WIFI_STA); // Set WiFi to station mode
-    WiFi.begin(ssid, password);
+void setupWiFi() {
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
     Serial.print("Connecting to WiFi");
-    
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 20) {
         delay(500);
@@ -38,208 +44,172 @@ bool initWiFi() {
         attempts++;
     }
     Serial.println();
-    
+
     if (WiFi.status() == WL_CONNECTED) {
-        Serial.print("Connected! IP address: ");
+        Serial.print("Connected! IP: ");
         Serial.println(WiFi.localIP());
-        return true;
     } else {
-        Serial.println("Failed to connect to WiFi");
-        return false;
+        Serial.println("Connection failed!");
     }
 }
 
-// Send system status to all connected clients
+void handleWebSocketMessage(uint8_t num, uint8_t *payload, size_t length) {
+  StaticJsonDocument<200> doc;
+  DeserializationError error = deserializeJson(doc, payload, length);
+
+  if (error) {
+    Serial.println("Failed to parse WebSocket message");
+    return;
+  }
+
+  const char* type = doc["type"];
+  if (strcmp(type, "command") == 0) {
+    const char* command = doc["command"];
+    
+    if (strcmp(command, "toggleSystem") == 0) {
+      systemOn = !systemOn;
+      digitalWrite(SYSTEM_POWER_RELAY, systemOn ? HIGH : LOW);
+      if (!systemOn) {
+        motorRunning = false;
+        digitalWrite(MOTOR_RELAY, LOW);
+      }
+      broadcastStatus();
+    }
+    else if (strcmp(command, "toggleMotor") == 0) {
+      if (systemOn && !motorStarting) {
+        startMotor();
+      } else if (motorRunning) {
+        stopMotor();
+      }
+      broadcastStatus();
+    }
+    else if (strcmp(command, "stopAll") == 0) {
+      systemOn = false;
+      motorRunning = false;
+      digitalWrite(SYSTEM_POWER_RELAY, LOW);
+      digitalWrite(MOTOR_RELAY, LOW);
+      broadcastStatus();
+    }
+    else if (strcmp(command, "setSystemState") == 0) {
+      bool state = doc["state"];
+      systemOn = state;
+      digitalWrite(SYSTEM_POWER_RELAY, systemOn ? HIGH : LOW);
+      if (!systemOn) {
+        motorRunning = false;
+        digitalWrite(MOTOR_RELAY, LOW);
+      }
+      broadcastStatus();
+    }
+    else if (strcmp(command, "setMotorState") == 0) {
+      bool state = doc["state"];
+      if (systemOn && state && !motorStarting) {
+        startMotor();
+      } else if (!state && motorRunning) {
+        stopMotor();
+      }
+      broadcastStatus();
+    }
+    else if (strcmp(command, "getStatus") == 0) {
+      broadcastStatus();
+    }
+  }
+}
+
+void startMotor() {
+  if (!systemOn || motorStarting || motorRunning) return;
+  
+  motorStarting = true;
+  motorStartTime = millis();
+  digitalWrite(MOTOR_RELAY, HIGH);
+  motorRunning = true;
+  
+  // Broadcast status immediately after starting
+  broadcastStatus();
+}
+
+void stopMotor() {
+  motorStarting = false;
+  motorRunning = false;
+  digitalWrite(MOTOR_RELAY, LOW);
+  
+  // Broadcast status immediately after stopping
+  broadcastStatus();
+}
+
 void broadcastStatus() {
-    if (!isWifiConnected) return;
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Cannot broadcast status: WiFi not connected");
+    return;
+  }
 
-    StaticJsonDocument<200> doc;
-    doc["type"] = "status";
-    doc["system"] = systemOn;
-    doc["motor"] = motorRunning;
-    
-    String status;
-    serializeJson(doc, status);
-    
-    Serial.print("Broadcasting status: ");
-    Serial.println(status);
-    webSocket.broadcastTXT(status);
-}
+  StaticJsonDocument<200> doc;
+  doc["type"] = "status";
+  doc["system"] = systemOn;
+  doc["motor"] = motorRunning;
+  doc["moisture"] = remoteMoisture;
 
-// Control system power with safety checks
-void controlSystem(bool turnOn) {
-    if (!isWifiConnected) return;
-
-    if (turnOn != systemOn) {
-        if (!turnOn && motorRunning) {
-            // Turn off motor first if system is being turned off
-            controlMotor(false);
-            delay(100); // Small delay to ensure motor is off
-        }
-
-        digitalWrite(SYSTEM_POWER_RELAY, turnOn ? HIGH : LOW);
-        systemOn = turnOn;
-        
-        Serial.print("System power: ");
-        Serial.println(systemOn ? "ON" : "OFF");
-        
-        broadcastStatus();
-    }
-}
-
-// Control motor with safety checks
-void controlMotor(bool turnOn) {
-    if (!isWifiConnected || !systemOn) return;
-
-    if (turnOn != motorRunning) {
-        digitalWrite(MOTOR_RELAY, turnOn ? HIGH : LOW);
-        motorRunning = turnOn;
-        
-        if (turnOn) {
-            motorStartTime = millis();
-        } else {
-            motorStartTime = 0;
-        }
-        
-        Serial.print("Motor: ");
-        Serial.println(motorRunning ? "ON" : "OFF");
-        
-        broadcastStatus();
-    }
-}
-
-// Emergency stop with safety checks
-void stopAll() {
-    if (!isWifiConnected) return;
-
-    // Stop motor first
-    digitalWrite(MOTOR_RELAY, LOW);
-    motorRunning = false;
-    motorStartTime = 0;
-    
-    // Then turn off system power
-    digitalWrite(SYSTEM_POWER_RELAY, LOW);
-    systemOn = false;
-    
-    Serial.println("Emergency stop triggered");
-    broadcastStatus();
-}
-
-// WebSocket event handler with improved error handling
-void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
-    switch(type) {
-        case WStype_DISCONNECTED:
-            Serial.printf("[%u] Disconnected!\n", num);
-            break;
-            
-        case WStype_CONNECTED:
-            {
-                Serial.printf("[%u] Connected!\n", num);
-                broadcastStatus();
-            }
-            break;
-            
-        case WStype_TEXT:
-            {
-                if (!payload || length == 0) {
-                    Serial.println("Empty payload received");
-                    return;
-                }
-                
-                Serial.printf("[%u] Received text: %s\n", num, payload);
-                
-                StaticJsonDocument<200> doc;
-                DeserializationError error = deserializeJson(doc, payload, length);
-                
-                if (error) {
-                    Serial.print("Failed to parse JSON: ");
-                    Serial.println(error.c_str());
-                    return;
-                }
-                
-                if (!doc.containsKey("type")) {
-                    Serial.println("Missing 'type' field in message");
-                    return;
-                }
-                
-                const char* type = doc["type"];
-                if (strcmp(type, "command") == 0) {
-                    if (!doc.containsKey("command")) {
-                        Serial.println("Missing 'command' field in message");
-                        return;
-                    }
-                    
-                    const char* command = doc["command"];
-                    
-                    if (strcmp(command, "toggleSystem") == 0) {
-                        controlSystem(!systemOn);
-                    } 
-                    else if (strcmp(command, "toggleMotor") == 0) {
-                        controlMotor(!motorRunning);
-                    }
-                    else if (strcmp(command, "stopAll") == 0) {
-                        stopAll();
-                    }
-                    else if (strcmp(command, "getStatus") == 0) {
-                        broadcastStatus();
-                    }
-                }
-            }
-            break;
-    }
+  String status;
+  serializeJson(doc, status);
+  webSocket.broadcastTXT(status);
 }
 
 void setup() {
     Serial.begin(115200);
-    delay(1000); // Give time for serial to initialize
+    delay(1000);
+    Serial.println("\nESP32 Pump Controller Starting...");
     
-    // Initialize pins with pull-down
+    // Initialize pins
     pinMode(SYSTEM_POWER_RELAY, OUTPUT);
     pinMode(MOTOR_RELAY, OUTPUT);
     digitalWrite(SYSTEM_POWER_RELAY, LOW);
     digitalWrite(MOTOR_RELAY, LOW);
     
-    Serial.println("Pins initialized");
+    // Setup WiFi
+    setupWiFi();
     
-    // Initialize WiFi
-    isWifiConnected = initWiFi();
-    
-    if (isWifiConnected) {
-        // Start WebSocket server
-        webSocket.begin();
-        webSocket.onEvent(webSocketEvent);
-        Serial.println("WebSocket server started on port 80");
-    }
+    // Start WebSocket server
+    webSocket.begin();
+    webSocket.onEvent([&](uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
+        if (type == WStype_TEXT) {
+            handleWebSocketMessage(num, payload, length);
+        }
+    });
+    Serial.println("WebSocket server running");
+    Serial.printf("Connect to: %s:81\n", WiFi.localIP().toString().c_str());
 }
 
 void loop() {
-    if (isWifiConnected) {
-        webSocket.loop();
-        
-        // Check motor timer with overflow protection
-        if (motorRunning && motorStartTime > 0) {
-            unsigned long currentTime = millis();
-            if (currentTime - motorStartTime >= MOTOR_TIMEOUT || currentTime < motorStartTime) {
-                Serial.println("Motor timeout reached, stopping motor");
-                controlMotor(false);
-            }
+    webSocket.loop();
+    
+    unsigned long currentMillis = millis();
+    
+    // Handle motor timing
+    if (motorRunning) {
+        if (motorStarting && (currentMillis - motorStartTime >= STARTER_TIMEOUT)) {
+            motorStarting = false;
+            broadcastStatus();
         }
         
-        // Monitor WiFi connection
-        if (WiFi.status() != WL_CONNECTED) {
-            Serial.println("WiFi disconnected. Attempting to reconnect...");
-            isWifiConnected = initWiFi();
-            if (!isWifiConnected) {
-                stopAll();
-            }
-        }
-    } else {
-        // Try to reconnect WiFi if disconnected
-        if (WiFi.status() != WL_CONNECTED) {
-            Serial.println("Attempting to connect to WiFi...");
-            isWifiConnected = initWiFi();
+        if (currentMillis - motorStartTime >= MOTOR_RUN_TIME) {
+            stopMotor();
         }
     }
     
-    delay(10); // Small delay to prevent watchdog issues
+    // Periodic status broadcast
+    if (currentMillis - lastStatus >= STATUS_INTERVAL) {
+        if (WiFi.status() == WL_CONNECTED) {
+            broadcastStatus();
+        }
+        lastStatus = currentMillis;
+    }
+    
+    // Check WiFi
+    if (WiFi.status() != WL_CONNECTED) {
+        static unsigned long lastWiFiCheck = 0;
+        if (currentMillis - lastWiFiCheck >= 5000) {  // Check every 5 seconds
+            Serial.println("WiFi disconnected, reconnecting...");
+            setupWiFi();
+            lastWiFiCheck = currentMillis;
+        }
+    }
 }
