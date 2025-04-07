@@ -19,7 +19,7 @@ const Dashboard = () => {
           <div className="flex items-center justify-between">
             <h1 className="text-2xl md:text-3xl font-bold flex items-center gap-2">
               <Droplet className="w-8 h-8" />
-              Auto Pump Scheduler
+              Pompa Bibitan PT.DLJ1
             </h1>
             <div className="flex items-center gap-2">
               <span className={`status-badge ${isConnected ? 'status-badge-online' : 'status-badge-offline'}`}>
@@ -64,7 +64,7 @@ const Dashboard = () => {
       <footer className="bg-white dark:bg-gray-800 border-t py-4 mt-8">
         <div className="container mx-auto px-4">
           <p className="text-center text-sm text-gray-600 dark:text-gray-400">
-            Auto Pump Scheduler &copy; {new Date().getFullYear()}
+          Pompa Bibitan PT.DLJ1 &copy; {new Date().getFullYear()}
           </p>
         </div>
       </footer>
