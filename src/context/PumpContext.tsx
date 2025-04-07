@@ -18,6 +18,10 @@ interface PumpContextType {
   addSchedule: (schedule: Omit<Schedule, 'id' | 'createdAt'>) => void;
   updateSchedule: (id: string, updates: Partial<Schedule>) => void;
   deleteSchedule: (id: string) => void;
+  setMoistureThresholds: (dry: number, wet: number) => Promise<void>;
+  moistureThresholds: { dry: number; wet: number };
+  autoMode: boolean;
+  toggleAutoMode: () => Promise<void>;
 }
 
 const PumpContext = createContext<PumpContextType | null>(null);
@@ -41,6 +45,11 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const saved = localStorage.getItem('schedules');
     return saved ? JSON.parse(saved) : [];
   });
+  const [moistureThresholds, setMoistureThresholds] = useState(() => {
+    const saved = localStorage.getItem('moisture_thresholds');
+    return saved ? JSON.parse(saved) : { dry: 30, wet: 70 };
+  });
+  const [autoMode, setAutoMode] = useState(true);
 
   const ws = useRef<WebSocket | null>(null);
   const scheduleTimers = useRef<{ [key: string]: { start: NodeJS.Timeout; end: NodeJS.Timeout } }>({});
@@ -49,6 +58,11 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     localStorage.setItem('schedules', JSON.stringify(schedules));
   }, [schedules]);
+
+  // Save moisture thresholds to localStorage
+  useEffect(() => {
+    localStorage.setItem('moisture_thresholds', JSON.stringify(moistureThresholds));
+  }, [moistureThresholds]);
 
   // Schedule management
   const addSchedule = useCallback((schedule: Omit<Schedule, 'id' | 'createdAt'>) => {
@@ -77,59 +91,30 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // WebSocket message sender with retry
   const sendMessage = useCallback((message: any) => {
-    if (!ws.current) {
-      console.error('WebSocket not initialized');
-      toast({
-        title: "Connection Error",
-        description: "Not connected to ESP32",
-        variant: "destructive"
-      });
-      return Promise.reject(new Error('WebSocket not initialized'));
-    }
-
     return new Promise<void>((resolve, reject) => {
-      const maxRetries = 3;
-      let retryCount = 0;
+      if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
+        console.error('WebSocket not connected');
+        toast({
+          title: "Connection Error",
+          description: "Not connected to ESP32",
+          variant: "destructive"
+        });
+        return reject(new Error('WebSocket not connected'));
+      }
 
-      const tryToSend = () => {
-        if (ws.current?.readyState === WebSocket.OPEN) {
-          try {
-            const messageStr = JSON.stringify(message);
-            console.log('Sending message:', messageStr);
-            ws.current.send(messageStr);
-            resolve();
-          } catch (error) {
-            console.error('Error sending message:', error);
-            reject(error);
-            toast({
-              title: "Error",
-              description: "Failed to send command",
-              variant: "destructive"
-            });
-          }
-        } else if (retryCount < maxRetries) {
-          retryCount++;
-          console.log(`Retrying send (${retryCount}/${maxRetries})...`);
-          setTimeout(tryToSend, 100); // Retry after 100ms
-        } else {
-          const error = new Error('WebSocket not ready after retries');
-          console.error(error);
-          reject(error);
-          toast({
-            title: "Connection Error",
-            description: "WebSocket not ready",
-            variant: "destructive"
-          });
-        }
-      };
-
-      tryToSend();
+      try {
+        console.log('Sending message:', message);
+        ws.current.send(JSON.stringify(message));
+        resolve();
+      } catch (error) {
+        console.error('Failed to send message:', error);
+        reject(error);
+      }
     });
   }, []);
 
   // Control functions with Promise return
   const toggleSystem = useCallback(async () => {
-    console.log('Toggle system requested');
     if (!isConnected) {
       toast({
         title: "Error",
@@ -138,19 +123,41 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
       return Promise.reject(new Error('Not connected'));
     }
-    return sendMessage({ type: 'command', command: 'toggleSystem' });
-  }, [isConnected, sendMessage]);
+
+    try {
+      await sendMessage({ type: 'command', command: 'toggleSystem' });
+      
+      // Wait for confirmation with shorter timeout
+      return new Promise<void>((resolve, reject) => {
+        const expectedState = !systemOn;
+        let attempts = 0;
+        const maxAttempts = 10; // Dari 20 ke 10
+        
+        const checkInterval = setInterval(async () => {
+          attempts++;
+          try {
+            await sendMessage({ type: 'command', command: 'getStatus' });
+            
+            if (systemOn === expectedState) {
+              clearInterval(checkInterval);
+              resolve();
+            } else if (attempts >= maxAttempts) {
+              clearInterval(checkInterval);
+              reject(new Error(`System failed to turn ${expectedState ? 'ON' : 'OFF'}`));
+            }
+          } catch (error) {
+            clearInterval(checkInterval);
+            reject(error);
+          }
+        }, 50); // Dari 100ms ke 50ms
+      });
+    } catch (error) {
+      console.error('Toggle system failed:', error);
+      throw error;
+    }
+  }, [isConnected, systemOn, sendMessage]);
 
   const startMotor = useCallback(async () => {
-    console.log('Start motor requested');
-    if (!systemOn) {
-      toast({
-        title: "Error",
-        description: "System must be ON to start motor",
-        variant: "destructive"
-      });
-      return Promise.reject(new Error('System is off'));
-    }
     if (!isConnected) {
       toast({
         title: "Error",
@@ -159,11 +166,50 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
       return Promise.reject(new Error('Not connected'));
     }
-    return sendMessage({ type: 'command', command: 'toggleMotor' });
-  }, [systemOn, isConnected, sendMessage]);
+
+    if (!systemOn) {
+      const error = new Error('System is off');
+      toast({
+        title: "Error",
+        description: "Cannot start motor: System is off",
+        variant: "destructive"
+      });
+      return Promise.reject(error);
+    }
+
+    try {
+      await sendMessage({ type: 'command', command: 'startMotor' });
+      
+      // Wait for confirmation with shorter timeout
+      return new Promise<void>((resolve, reject) => {
+        let attempts = 0;
+        const maxAttempts = 10; // Dari 20 ke 10
+        
+        const checkInterval = setInterval(async () => {
+          attempts++;
+          try {
+            await sendMessage({ type: 'command', command: 'getStatus' });
+            
+            if (motorRunning) {
+              clearInterval(checkInterval);
+              resolve();
+            } else if (attempts >= maxAttempts) {
+              clearInterval(checkInterval);
+              reject(new Error('Motor failed to start'));
+            }
+          } catch (error) {
+            clearInterval(checkInterval);
+            reject(error);
+          }
+        }, 50); // Dari 100ms ke 50ms
+      });
+    } catch (error) {
+      console.error('Start motor failed:', error);
+      throw error;
+    }
+  }, [isConnected, systemOn, motorRunning, sendMessage]);
 
   const stopMotor = useCallback(async () => {
-    console.log('Stop motor requested');
     if (!isConnected) {
       toast({
         title: "Error",
@@ -172,8 +218,38 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
       return Promise.reject(new Error('Not connected'));
     }
-    return sendMessage({ type: 'command', command: 'toggleMotor' });
-  }, [isConnected, sendMessage]);
+
+    try {
+      await sendMessage({ type: 'command', command: 'stopMotor' });
+      
+      // Wait for confirmation with shorter timeout
+      return new Promise<void>((resolve, reject) => {
+        let attempts = 0;
+        const maxAttempts = 10; // Dari 20 ke 10
+        
+        const checkInterval = setInterval(async () => {
+          attempts++;
+          try {
+            await sendMessage({ type: 'command', command: 'getStatus' });
+            
+            if (!motorRunning) {
+              clearInterval(checkInterval);
+              resolve();
+            } else if (attempts >= maxAttempts) {
+              clearInterval(checkInterval);
+              reject(new Error('Motor failed to stop'));
+            }
+          } catch (error) {
+            clearInterval(checkInterval);
+            reject(error);
+          }
+        }, 50); // Dari 100ms ke 50ms
+      });
+    } catch (error) {
+      console.error('Stop motor failed:', error);
+      throw error;
+    }
+  }, [isConnected, motorRunning, sendMessage]);
 
   const stopAll = useCallback(async () => {
     if (!isConnected) {
@@ -189,184 +265,246 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Schedule execution
   const executeSchedule = useCallback(async (schedule: Schedule) => {
-    if (!isConnected || !schedule.enabled) return;
+    if (!isConnected || !schedule.enabled) {
+      console.log('Schedule skipped - not connected or disabled');
+      return;
+    }
 
     try {
-      console.log(`Executing schedule: ${schedule.name}`);
-      
       // Get current time
       const now = new Date();
       const currentTime = now.toTimeString().substring(0, 5); // HH:mm
+      console.log(`Checking schedule ${schedule.name} - Current: ${currentTime}, Start: ${schedule.startTime}, End: ${schedule.endTime}`);
       
-      // Check if we should turn system on or off
       if (currentTime === schedule.startTime) {
-        console.log('Turning system ON per schedule');
-        await sendMessage({
-          type: 'command',
-          command: 'setSystemState',
-          state: true
-        });
-        
-        // Turn on motor with 2-second timer
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        await sendMessage({
-          type: 'command',
-          command: 'setMotorState',
-          state: true
-        });
+        console.log(`Starting schedule: ${schedule.name}`);
+        try {
+          // Kirim command scheduleStart ke ESP32
+          console.log('Sending scheduleStart command...');
+          await sendMessage({ type: 'command', command: 'scheduleStart' });
+          
+          // Wait for system ON confirmation
+          await new Promise<void>((resolve, reject) => {
+            let attempts = 0;
+            const maxAttempts = 10;
+            
+            const checkInterval = setInterval(async () => {
+              attempts++;
+              console.log(`Checking system status... Attempt ${attempts}/${maxAttempts}`);
+              try {
+                await sendMessage({ type: 'command', command: 'getStatus' });
+                
+                if (systemOn) {
+                  console.log('System ON confirmed');
+                  clearInterval(checkInterval);
+                  resolve();
+                } else if (attempts >= maxAttempts) {
+                  console.error('System failed to turn ON');
+                  clearInterval(checkInterval);
+                  reject(new Error('System failed to turn ON'));
+                }
+              } catch (error) {
+                console.error('Error checking status:', error);
+                clearInterval(checkInterval);
+                reject(error);
+              }
+            }, 500); // Check every 500ms
+          });
 
-        toast({
-          title: "Schedule Started",
-          description: `System turned ON for schedule: ${schedule.name}`
-        });
-      }
-      else if (currentTime === schedule.endTime) {
-        console.log('Turning system OFF per schedule');
-        await sendMessage({
-          type: 'command',
-          command: 'setSystemState',
-          state: false
-        });
-
-        toast({
-          title: "Schedule Ended",
-          description: `System turned OFF for schedule: ${schedule.name}`
-        });
+          toast({
+            title: "Schedule Started",
+            description: `System and motor started for schedule: ${schedule.name}`
+          });
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+          console.error('Schedule start error:', errorMessage);
+          toast({
+            title: "Schedule Failed",
+            description: `Failed to start schedule: ${errorMessage}`,
+            variant: "destructive"
+          });
+          throw error;
+        }
+      } else if (currentTime === schedule.endTime) {
+        console.log(`Ending schedule: ${schedule.name}`);
+        try {
+          // Kirim command scheduleEnd ke ESP32
+          console.log('Sending scheduleEnd command...');
+          await sendMessage({ type: 'command', command: 'scheduleEnd' });
+          toast({
+            title: "Schedule Ended",
+            description: `System stopped for schedule: ${schedule.name}`
+          });
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+          console.error('Schedule end error:', errorMessage);
+          toast({
+            title: "Schedule Failed",
+            description: `Failed to end schedule: ${errorMessage}`,
+            variant: "destructive"
+          });
+          throw error;
+        }
       }
     } catch (error) {
-      console.error('Failed to execute schedule:', error);
-      toast({
-        title: "Schedule Failed",
-        description: `Failed to execute schedule: ${schedule.name}`,
-        variant: "destructive"
-      });
+      console.error('Error executing schedule:', error);
     }
-  }, [isConnected, sendMessage]);
+  }, [isConnected, sendMessage, systemOn]);
 
   // Schedule timer setup
   const setupScheduleTimer = useCallback((schedule: Schedule) => {
-    if (!schedule.enabled) return;
+    let isStarting = false; // Flag untuk mencegah multiple start
+    let hasStarted = false; // Flag untuk track apakah jadwal sudah start hari ini
+    
+    const timer = setInterval(async () => {
+      if (!isConnected || !schedule.enabled) return;
 
-    const now = new Date();
-    const today = now.getDay();
-
-    // Setup start time
-    const [startHours, startMinutes] = schedule.startTime.split(':').map(Number);
-    const startTime = new Date(now);
-    startTime.setHours(startHours, startMinutes, 0, 0);
-
-    // Setup end time
-    const [endHours, endMinutes] = schedule.endTime.split(':').map(Number);
-    const endTime = new Date(now);
-    endTime.setHours(endHours, endMinutes, 0, 0);
-
-    // If times have passed today, schedule for next occurrence
-    if (startTime <= now) {
-      startTime.setDate(startTime.getDate() + 1);
-    }
-    if (endTime <= now) {
-      endTime.setDate(endTime.getDate() + 1);
-    }
-
-    // Calculate delays
-    const msUntilStart = startTime.getTime() - now.getTime();
-    const msUntilEnd = endTime.getTime() - now.getTime();
-
-    console.log(`Next start of ${schedule.name} in ${msUntilStart / 1000} seconds`);
-    console.log(`Next end of ${schedule.name} in ${msUntilEnd / 1000} seconds`);
-
-    // Clear any existing timers
-    if (scheduleTimers.current[schedule.id]) {
-      clearTimeout(scheduleTimers.current[schedule.id].start);
-      clearTimeout(scheduleTimers.current[schedule.id].end);
-    }
-
-    // Set start timer
-    const startTimer = setTimeout(() => {
-      const currentDay = new Date().getDay();
-      if (schedule.days.includes(currentDay)) {
-        console.log(`Schedule ${schedule.name} start triggered on day ${currentDay}`);
-        // Turn system on
-        sendMessage({
-          type: 'command',
-          command: 'setSystemState',
-          state: true
-        });
+      try {
+        const now = new Date();
+        const currentTime = now.toTimeString().substring(0, 5); // HH:mm
         
-        // Turn on motor with 2-second timer after system is on
-        setTimeout(() => {
-          sendMessage({
-            type: 'command',
-            command: 'setMotorState',
-            state: true
-          });
-        }, 1000);
-
-        toast({
-          title: "Jadwal Dimulai",
-          description: `Sistem dihidupkan untuk jadwal: ${schedule.name}`
-        });
-      }
-      // Setup next day's timer
-      setupScheduleTimer(schedule);
-    }, msUntilStart);
-
-    // Set end timer
-    const endTimer = setTimeout(() => {
-      const currentDay = new Date().getDay();
-      if (schedule.days.includes(currentDay)) {
-        console.log(`Schedule ${schedule.name} end triggered on day ${currentDay}`);
-        // Turn system off
-        sendMessage({
-          type: 'command',
-          command: 'setSystemState',
-          state: false
-        });
-
-        toast({
-          title: "Jadwal Selesai",
-          description: `Sistem dimatikan untuk jadwal: ${schedule.name}`
-        });
-      }
-      // Setup next day's timer
-      setupScheduleTimer(schedule);
-    }, msUntilEnd);
-
-    // Store both timers
-    scheduleTimers.current[schedule.id] = {
-      start: startTimer,
-      end: endTimer
-    };
-  }, [sendMessage]);
-
-  // Cleanup function for schedule timers
-  const cleanupScheduleTimers = useCallback(() => {
-    Object.values(scheduleTimers.current).forEach(timers => {
-      if (timers.start) clearTimeout(timers.start);
-      if (timers.end) clearTimeout(timers.end);
-    });
-    scheduleTimers.current = {};
-  }, []);
-
-  // Setup schedule timers when connected
-  useEffect(() => {
-    if (isConnected) {
-      console.log('Setting up schedule timers...');
-      schedules.forEach(schedule => {
-        if (schedule.enabled) {
-          console.log(`Setting up timer for schedule: ${schedule.name}`);
-          setupScheduleTimer(schedule);
+        // Reset hasStarted flag di tengah malam
+        if (currentTime === "00:00") {
+          hasStarted = false;
         }
+        
+        if (currentTime === schedule.startTime && !hasStarted && !isStarting) {
+          console.log(`Schedule ${schedule.name} start time matched: ${currentTime}`);
+          try {
+            isStarting = true; // Set flag bahwa kita sedang dalam proses start
+            hasStarted = true; // Set flag bahwa jadwal sudah start hari ini
+            
+            // Kirim command scheduleStart ke ESP32
+            console.log('Sending scheduleStart command...');
+            await sendMessage({ type: 'command', command: 'scheduleStart' });
+            
+            // Wait for system ON confirmation
+            await new Promise<void>((resolve, reject) => {
+              let attempts = 0;
+              const maxAttempts = 10;
+              
+              const checkInterval = setInterval(async () => {
+                attempts++;
+                console.log(`Checking system status... Attempt ${attempts}/${maxAttempts}`);
+                try {
+                  await sendMessage({ type: 'command', command: 'getStatus' });
+                  
+                  if (systemOn) {
+                    console.log('System ON confirmed');
+                    clearInterval(checkInterval);
+                    resolve();
+                  } else if (attempts >= maxAttempts) {
+                    console.error('System failed to turn ON');
+                    clearInterval(checkInterval);
+                    reject(new Error('System failed to turn ON'));
+                  }
+                } catch (error) {
+                  console.error('Error checking status:', error);
+                  clearInterval(checkInterval);
+                  reject(error);
+                }
+              }, 500);
+            });
+
+            toast({
+              title: "Schedule Started",
+              description: `System and motor started for schedule: ${schedule.name}`
+            });
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            console.error('Schedule start error:', errorMessage);
+            toast({
+              title: "Schedule Failed",
+              description: `Failed to start schedule: ${errorMessage}`,
+              variant: "destructive"
+            });
+          } finally {
+            isStarting = false; // Reset flag setelah proses selesai
+          }
+        } else if (currentTime === schedule.endTime) {
+          console.log(`Schedule ${schedule.name} end time matched: ${currentTime}`);
+          try {
+            // Kirim command scheduleEnd ke ESP32
+            console.log('Sending scheduleEnd command...');
+            await sendMessage({ type: 'command', command: 'scheduleEnd' });
+            toast({
+              title: "Schedule Ended",
+              description: `System stopped for schedule: ${schedule.name}`
+            });
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            console.error('Schedule end error:', errorMessage);
+            toast({
+              title: "Schedule Failed",
+              description: `Failed to end schedule: ${errorMessage}`,
+              variant: "destructive"
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Error in schedule timer:', error);
+      }
+    }, 1000); // Check every second
+
+    return () => clearInterval(timer);
+  }, [isConnected, sendMessage, systemOn]);
+
+  // Setup schedule timers
+  useEffect(() => {
+    console.log('Setting up schedule timers...');
+    const timers = schedules
+      .filter(schedule => schedule.enabled)
+      .map(schedule => {
+        console.log(`Setting up timer for schedule: ${schedule.name}`);
+        return setupScheduleTimer(schedule);
       });
-    } else {
-      console.log('Cleaning up schedule timers...');
-      cleanupScheduleTimers();
-    }
 
     return () => {
-      cleanupScheduleTimers();
+      console.log('Cleaning up schedule timers...');
+      timers.forEach(cleanup => cleanup());
     };
-  }, [isConnected, schedules, setupScheduleTimer, cleanupScheduleTimers]);
+  }, [schedules, setupScheduleTimer]);
+
+  // Update moisture thresholds
+  const updateMoistureThresholds = useCallback(async (dry: number, wet: number) => {
+    if (!isConnected) {
+      toast({
+        title: "Error",
+        description: "Not connected to ESP32",
+        variant: "destructive"
+      });
+      return Promise.reject(new Error('Not connected'));
+    }
+
+    try {
+      await sendMessage({ type: 'command', command: 'setMoistureThresholds', dry, wet });
+      setMoistureThresholds({ dry, wet });
+      localStorage.setItem('moisture_thresholds', JSON.stringify({ dry, wet }));
+      return Promise.resolve();
+    } catch (error) {
+      console.error('Failed to update thresholds:', error);
+      return Promise.reject(error);
+    }
+  }, [isConnected, sendMessage]);
+
+  // Toggle auto mode
+  const toggleAutoMode = useCallback(async () => {
+    if (!isConnected) {
+      toast({
+        title: "Error",
+        description: "Not connected to ESP32",
+        variant: "destructive"
+      });
+      return Promise.reject(new Error('Not connected'));
+    }
+    try {
+      await sendMessage({ type: 'command', command: 'toggleAutoMode' });
+      return Promise.resolve();
+    } catch (error) {
+      console.error('Failed to toggle auto mode:', error);
+      return Promise.reject(error);
+    }
+  }, [isConnected, sendMessage]);
 
   // WebSocket connection
   const connectToDevice = useCallback((ip: string) => {
@@ -454,27 +592,7 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
       };
 
       newWs.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          console.log('Received WebSocket message:', data);
-
-          if (data.type === 'status') {
-            if (data.system !== undefined) setSystemOn(data.system);
-            if (data.motor !== undefined) setMotorRunning(data.motor);
-            if (data.moisture !== undefined) {
-              setRemoteMoisture(data.moisture);
-              const now = Date.now();
-              setMoistureHistory(prev => {
-                const newHistory = [...prev, { timestamp: now, value: data.moisture }];
-                const cutoff = now - 60 * 60 * 1000; // 1 hour ago
-                return newHistory.filter(point => point.timestamp > cutoff);
-              });
-            }
-            setLastRemoteUpdate(Date.now());
-          }
-        } catch (error) {
-          console.error('Error parsing WebSocket message:', error);
-        }
+        handleWebSocketMessage(event);
       };
 
       ws.current = newWs;
@@ -488,6 +606,52 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [sendMessage]);
 
+  // WebSocket message handler
+  const handleWebSocketMessage = useCallback((event: MessageEvent) => {
+    try {
+      const data = JSON.parse(event.data);
+      console.log('Received WebSocket message:', data);
+
+      if (data.type === 'status') {
+        // Update system status
+        if (data.system !== undefined) {
+          console.log('System status:', data.system ? 'ON' : 'OFF');
+          setSystemOn(data.system);
+        }
+        
+        // Update motor status with starting state
+        if (data.motor !== undefined || data.starting !== undefined) {
+          const isRunning = data.motor || false;
+          const isStarting = data.starting || false;
+          console.log('Motor status:', isRunning ? 'RUNNING' : (isStarting ? 'STARTING' : 'OFF'));
+          setMotorRunning(isRunning);
+        }
+        
+        // Update moisture data
+        if (data.moisture !== undefined) {
+          setRemoteMoisture(data.moisture);
+          const now = Date.now();
+          setMoistureHistory(prev => {
+            const newHistory = [...prev, { timestamp: now, value: data.moisture, isAuto: data.autoMode }];
+            const cutoff = now - 60 * 60 * 1000; // 1 hour ago
+            return newHistory.filter(point => point.timestamp > cutoff);
+          });
+        }
+        
+        // Update auto mode
+        if (data.autoMode !== undefined) {
+          console.log('Auto mode:', data.autoMode ? 'ON' : 'OFF');
+          setAutoMode(data.autoMode);
+        }
+        
+        // Update last remote update timestamp
+        setLastRemoteUpdate(Date.now());
+      }
+    } catch (error) {
+      console.error('Error parsing WebSocket message:', error);
+    }
+  }, []);
+
   // Auto-connect on mount and request status updates periodically
   useEffect(() => {
     const lastIp = localStorage.getItem('esp32_ip');
@@ -495,12 +659,12 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
       connectToDevice(lastIp);
     }
 
-    // Request status update every 2 seconds if connected
+    // Request status update every 500ms if connected
     const statusInterval = setInterval(() => {
       if (isConnected && ws.current?.readyState === WebSocket.OPEN) {
         sendMessage({ type: 'command', command: 'getStatus' });
       }
-    }, 2000);
+    }, 500);
 
     return () => {
       clearInterval(statusInterval);
@@ -525,6 +689,10 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
         addSchedule,
         updateSchedule,
         deleteSchedule,
+        setMoistureThresholds: updateMoistureThresholds,
+        moistureThresholds,
+        autoMode,
+        toggleAutoMode,
       }}
     >
       {children}

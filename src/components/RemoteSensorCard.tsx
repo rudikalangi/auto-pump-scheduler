@@ -4,59 +4,91 @@ import { usePump } from '@/context/PumpContext';
 import { Card } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { formatDistanceToNow } from 'date-fns';
+import { toast } from '@/components/ui/use-toast';
 
 const RemoteSensorCard: React.FC = () => {
-  const { remoteMoisture, lastRemoteUpdate, setMoistureThresholds } = usePump();
+  const { 
+    remoteMoisture, 
+    lastRemoteUpdate, 
+    setMoistureThresholds, 
+    moistureThresholds,
+    autoMode,
+    toggleAutoMode 
+  } = usePump();
   
-  // State untuk threshold sliders
-  const [dryThreshold, setDryThreshold] = React.useState(30);
-  const [wetThreshold, setWetThreshold] = React.useState(70);
+  // State untuk threshold sliders dengan nilai dari context
+  const [dryThreshold, setDryThreshold] = React.useState(moistureThresholds.dry);
+  const [wetThreshold, setWetThreshold] = React.useState(moistureThresholds.wet);
   const [isUpdating, setIsUpdating] = React.useState(false);
+  
+  // Update local state ketika nilai di context berubah
+  React.useEffect(() => {
+    setDryThreshold(moistureThresholds.dry);
+    setWetThreshold(moistureThresholds.wet);
+  }, [moistureThresholds]);
   
   // Handler untuk update threshold
   const handleUpdateThresholds = async () => {
     if (dryThreshold >= wetThreshold) {
-      // toast({
-      //   variant: "destructive",
-      //   title: "Invalid Thresholds",
-      //   description: "Dry threshold must be lower than wet threshold"
-      // });
+      toast({
+        variant: "destructive",
+        title: "Invalid Thresholds",
+        description: "Dry threshold must be lower than wet threshold"
+      });
       return;
     }
     
     setIsUpdating(true);
     try {
       await setMoistureThresholds(dryThreshold, wetThreshold);
-      // toast({
-      //   title: "Success",
-      //   description: "Thresholds updated successfully"
-      // });
+      toast({
+        title: "Success",
+        description: "Thresholds updated successfully"
+      });
     } catch (error) {
-      // toast({
-      //   variant: "destructive",
-      //   title: "Error",
-      //   description: "Failed to update thresholds"
-      // });
-      // console.error('Update threshold error:', error);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to update thresholds"
+      });
+      console.error('Update threshold error:', error);
     } finally {
       setIsUpdating(false);
     }
   };
   
-  // Calculate moisture level status
-  const getMoistureStatus = (value: number) => {
-    if (value < 30) return { color: 'bg-red-500', text: 'Dry' };
-    if (value < 70) return { color: 'bg-green-500', text: 'Good' };
-    return { color: 'bg-blue-500', text: 'Wet' };
+  // Handler untuk toggle auto mode
+  const handleToggleAutoMode = async () => {
+    try {
+      await toggleAutoMode();
+      toast({
+        title: "Success",
+        description: `Auto mode ${autoMode ? 'disabled' : 'enabled'}`
+      });
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to toggle auto mode"
+      });
+    }
   };
   
-  const status = getMoistureStatus(remoteMoisture);
-  
-  // Calculate time since last update
+  // Get time since last update
   const getTimeSinceUpdate = () => {
-    if (!lastRemoteUpdate) return 'No data';
-    return formatDistanceToNow(lastRemoteUpdate) + ' ago';
+    if (!lastRemoteUpdate) return 'Never';
+    return formatDistanceToNow(lastRemoteUpdate, { addSuffix: true });
   };
+  
+  // Get moisture status
+  const status = React.useMemo(() => {
+    if (remoteMoisture <= dryThreshold) {
+      return { text: 'Dry', color: 'bg-red-500' };
+    } else if (remoteMoisture >= wetThreshold) {
+      return { text: 'Wet', color: 'bg-green-500' };
+    }
+    return { text: 'Good', color: 'bg-blue-500' };
+  }, [remoteMoisture, dryThreshold, wetThreshold]);
   
   return (
     <Card className="p-4 space-y-4">
@@ -74,15 +106,27 @@ const RemoteSensorCard: React.FC = () => {
       <div className="space-y-2">
         <div className="flex justify-between items-center">
           <span className="text-3xl font-bold">{remoteMoisture}%</span>
-          <span className={`px-2 py-1 rounded-full text-white text-sm ${status.color}`}>
-            {status.text}
-          </span>
+          <div className="flex items-center space-x-2">
+            <span className={`px-2 py-1 rounded-full text-white text-sm ${status.color}`}>
+              {status.text}
+            </span>
+            <button
+              onClick={handleToggleAutoMode}
+              className={`px-2 py-1 rounded-full text-white text-sm ${
+                autoMode ? 'bg-green-500' : 'bg-gray-500'
+              }`}
+            >
+              Auto: {autoMode ? 'ON' : 'OFF'}
+            </button>
+          </div>
         </div>
         
         <Progress
           value={remoteMoisture}
-          className="h-2"
-          indicatorClassName={status.color}
+          className={`h-2.5 ${status.color} transition-all duration-300`}
+          style={{
+            background: 'rgba(0,0,0,0.1)',
+          }}
         />
         
         <div className="flex justify-between text-sm text-gray-500">
@@ -94,6 +138,11 @@ const RemoteSensorCard: React.FC = () => {
       
       <div className="text-sm text-gray-500">
         <p>Optimal Range: {dryThreshold}% - {wetThreshold}%</p>
+        {autoMode && (
+          <p className="mt-1 text-xs">
+            System will automatically {remoteMoisture <= dryThreshold ? 'start' : 'stop'} when moisture is {remoteMoisture <= dryThreshold ? 'below' : 'above'} threshold
+          </p>
+        )}
       </div>
       
       <div className="space-y-4">
@@ -106,11 +155,9 @@ const RemoteSensorCard: React.FC = () => {
             min="0"
             max="100"
             value={dryThreshold}
-            onChange={(e) => setDryThreshold(Number(e.target.value))}
+            onChange={(e) => setDryThreshold(parseInt(e.target.value))}
             className="w-full"
-            disabled={isUpdating}
           />
-          <p className="text-sm text-gray-500">{dryThreshold}%</p>
         </div>
         
         <div>
@@ -122,30 +169,18 @@ const RemoteSensorCard: React.FC = () => {
             min="0"
             max="100"
             value={wetThreshold}
-            onChange={(e) => setWetThreshold(Number(e.target.value))}
+            onChange={(e) => setWetThreshold(parseInt(e.target.value))}
             className="w-full"
-            disabled={isUpdating}
           />
-          <p className="text-sm text-gray-500">{wetThreshold}%</p>
         </div>
         
         <button
           onClick={handleUpdateThresholds}
-          disabled={dryThreshold >= wetThreshold || isUpdating}
-          className={`w-full py-2 px-4 rounded-md text-white font-medium ${
-            dryThreshold >= wetThreshold || isUpdating
-              ? 'bg-gray-300 cursor-not-allowed'
-              : 'bg-blue-600 hover:bg-blue-700'
-          }`}
+          disabled={isUpdating}
+          className="w-full py-2 px-4 bg-blue-500 text-white rounded-md hover:bg-blue-600 disabled:opacity-50"
         >
           {isUpdating ? 'Updating...' : 'Update Thresholds'}
         </button>
-        
-        {dryThreshold >= wetThreshold && (
-          <p className="text-sm text-red-600">
-            Dry threshold must be lower than wet threshold
-          </p>
-        )}
       </div>
     </Card>
   );
