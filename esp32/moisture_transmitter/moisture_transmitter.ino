@@ -2,6 +2,7 @@
 #include <LoRa.h>
 #include <ArduinoJson.h>
 #include <EEPROM.h>
+#include <DHT.h>  // Tambahan library untuk DHT22
 
 // Pin definitions for LoRa
 #define LORA_SS 5       // LoRa radio chip select
@@ -11,6 +12,11 @@
 // Pin untuk sensor kelembaban
 #define MOISTURE_SENSOR_PIN 34  // ADC pin untuk sensor kelembaban
 #define MOISTURE_POWER_PIN 13   // Pin untuk power sensor (opsional, untuk mengurangi korosi)
+
+// Pin dan setup untuk DHT22
+#define DHTPIN 4        // Pin untuk DHT22
+#define DHTTYPE DHT22   // Tipe sensor DHT22
+DHT dht(DHTPIN, DHTTYPE);
 
 // Konfigurasi LoRa
 const long LORA_FREQUENCY = 433E6;  // Frekuensi LoRa (433 MHz)
@@ -38,6 +44,8 @@ unsigned long lastCheckSettings = 0;
 // Variable untuk sensor
 float currentMoisture = 0;
 bool pumpActive = false;
+float temperature = 0;    // Variabel untuk suhu dari DHT22
+float humidity = 0;       // Variabel untuk kelembaban dari DHT22
 
 // Simpan threshold ke EEPROM
 void saveThresholds() {
@@ -155,11 +163,26 @@ float readMoisture() {
   return moisture;
 }
 
+// Baca sensor DHT22
+void readDHT() {
+  temperature = dht.readTemperature();
+  humidity = dht.readHumidity();
+  
+  // Cek apakah pembacaan berhasil
+  if (isnan(temperature) || isnan(humidity)) {
+    Serial.println("Gagal membaca sensor DHT22!");
+    temperature = 0;
+    humidity = 0;
+  }
+}
+
 // Kirim data melalui LoRa
 void sendData(float moisture, const char* command) {
   StaticJsonDocument<200> doc;
   doc["moisture"] = moisture;
   doc["command"] = command;
+  doc["temperature"] = temperature;  // Tambahkan data suhu
+  doc["humidity"] = humidity;        // Tambahkan data kelembaban udara
   
   String json;
   serializeJson(doc, json);
@@ -171,7 +194,12 @@ void sendData(float moisture, const char* command) {
   Serial.print("Sent: Moisture = ");
   Serial.print(moisture);
   Serial.print("%, Command = ");
-  Serial.println(command);
+  Serial.print(command);
+  Serial.print(", Temperature = ");
+  Serial.print(temperature);
+  Serial.print("°C, Humidity = ");
+  Serial.print(humidity);
+  Serial.println("%");
 }
 
 void setup() {
@@ -186,6 +214,9 @@ void setup() {
     pinMode(MOISTURE_POWER_PIN, OUTPUT);
     digitalWrite(MOISTURE_POWER_PIN, LOW);
   }
+  
+  // Inisialisasi DHT22
+  dht.begin();
   
   // Load thresholds dari EEPROM
   loadThresholds();
@@ -204,9 +235,10 @@ void setup() {
 void loop() {
   unsigned long currentTime = millis();
   
-  // Baca sensor pada interval yang ditentukan
+  // Baca sensor kelembaban tanah
   if (currentTime - lastReadTime >= READING_INTERVAL) {
     currentMoisture = readMoisture();
+    readDHT();  // Baca sensor DHT22
     lastReadTime = currentTime;
     
     // Update status pompa berdasarkan kelembaban

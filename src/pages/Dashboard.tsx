@@ -5,6 +5,7 @@ import RemoteSensorCard from '@/components/RemoteSensorCard';
 import MoistureChart from '@/components/MoistureChart';
 import ScheduleManager from '@/components/ScheduleManager';
 import ManualControl from '@/components/ManualControl';
+import DHT22Card from '@/components/DHT22Card';
 import { usePump } from '@/context/PumpContext';
 import { Droplet, WifiOff } from 'lucide-react';
 
@@ -49,6 +50,7 @@ const Dashboard = () => {
             <NetworkSettings />
             <ESP32Connection />
             <ManualControl />
+            <DHT22Card />
             <RemoteSensorCard />
           </div>
 

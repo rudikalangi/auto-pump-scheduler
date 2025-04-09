@@ -4,8 +4,9 @@ import path from "path";
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => ({
+  base: '/',
   server: {
-    host: mode === 'development' ? "::" : '0.0.0.0',
+    host: true,
     port: 4001,
     strictPort: true,
   },

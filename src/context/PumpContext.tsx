@@ -22,6 +22,10 @@ interface PumpContextType {
   moistureThresholds: { dry: number; wet: number };
   autoMode: boolean;
   toggleAutoMode: () => Promise<void>;
+  sensorData: {
+    temperature: number;
+    humidity: number;
+  };
 }
 
 const PumpContext = createContext<PumpContextType | null>(null);
@@ -50,6 +54,10 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return saved ? JSON.parse(saved) : { dry: 30, wet: 70 };
   });
   const [autoMode, setAutoMode] = useState(true);
+  const [sensorData, setSensorData] = useState({
+    temperature: 0,
+    humidity: 0
+  });
 
   const ws = useRef<WebSocket | null>(null);
   const scheduleTimers = useRef<{ [key: string]: { start: NodeJS.Timeout; end: NodeJS.Timeout } }>({});
@@ -646,6 +654,11 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         // Update last remote update timestamp
         setLastRemoteUpdate(Date.now());
+        
+        // Update sensor data
+        if (data.temperature !== undefined && data.humidity !== undefined) {
+          setSensorData({ temperature: data.temperature, humidity: data.humidity });
+        }
       }
     } catch (error) {
       console.error('Error parsing WebSocket message:', error);
@@ -693,6 +706,7 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
         moistureThresholds,
         autoMode,
         toggleAutoMode,
+        sensorData,
       }}
     >
       {children}
