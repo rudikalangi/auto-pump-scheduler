@@ -99,11 +99,28 @@
     @apply px-4;
   }
   
-  .card {
-    @apply rounded-lg shadow-sm;
-  }
-  
   .grid-card {
-    grid-template-columns: 1fr;
+    @apply grid-cols-1;
   }
+}
+
+/* Dark mode adjustments */
+.dark .status-badge-online {
+  @apply bg-green-800 text-green-100;
+}
+
+.dark .status-badge-offline {
+  @apply bg-red-800 text-red-100;
+}
+
+.dark .header-gradient {
+  @apply bg-gradient-to-r from-blue-900 to-indigo-900;
+}
+
+.dark .card {
+  @apply border-gray-700 hover:bg-gray-800/50;
+}
+
+.dark .animate-fade-in {
+  @apply bg-yellow-900 border-yellow-800;
 }

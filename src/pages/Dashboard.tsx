@@ -6,6 +6,8 @@ import MoistureChart from '@/components/MoistureChart';
 import ScheduleManager from '@/components/ScheduleManager';
 import ManualControl from '@/components/ManualControl';
 import DHT22Card from '@/components/DHT22Card';
+import ThemeToggle from '@/components/ThemeToggle';
+import MultiSensorCard from '@/components/MultiSensorCard';
 import { usePump } from '@/context/PumpContext';
 import { Droplet, WifiOff } from 'lucide-react';
 
@@ -23,6 +25,7 @@ const Dashboard = () => {
               Pompa Bibitan PT.DLJ1
             </h1>
             <div className="flex items-center gap-2">
+              <ThemeToggle />
               <span className={`status-badge ${isConnected ? 'status-badge-online' : 'status-badge-offline'}`}>
                 {isConnected ? 'Connected' : 'Disconnected'}
               </span>
@@ -50,6 +53,7 @@ const Dashboard = () => {
             <NetworkSettings />
             <ESP32Connection />
             <ManualControl />
+            <MultiSensorCard />
             <DHT22Card />
             <RemoteSensorCard />
           </div>

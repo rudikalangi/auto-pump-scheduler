@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
-import { Schedule, SystemStatus, MoistureData } from '@/types';
+import { Schedule, SystemStatus, MoistureData, MoistureSensorData } from '@/types';
 import { toast } from '@/components/ui/use-toast';
 
 interface PumpContextType {
@@ -7,6 +7,7 @@ interface PumpContextType {
   systemOn: boolean;
   motorRunning: boolean;
   remoteMoisture: number;
+  moistureSensors: MoistureSensorData[];
   moistureHistory: MoistureData[];
   lastRemoteUpdate: number | null;
   toggleSystem: () => Promise<void>;
@@ -26,6 +27,7 @@ interface PumpContextType {
     temperature: number;
     humidity: number;
   };
+  floodAlert: boolean;
 }
 
 const PumpContext = createContext<PumpContextType | null>(null);
@@ -43,6 +45,7 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [systemOn, setSystemOn] = useState(false);
   const [motorRunning, setMotorRunning] = useState(false);
   const [remoteMoisture, setRemoteMoisture] = useState(0);
+  const [moistureSensors, setMoistureSensors] = useState<MoistureSensorData[]>([]);
   const [moistureHistory, setMoistureHistory] = useState<MoistureData[]>([]);
   const [lastRemoteUpdate, setLastRemoteUpdate] = useState<number | null>(null);
   const [schedules, setSchedules] = useState<Schedule[]>(() => {
@@ -58,6 +61,7 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
     temperature: 0,
     humidity: 0
   });
+  const [floodAlert, setFloodAlert] = useState(false);
 
   const ws = useRef<WebSocket | null>(null);
   const scheduleTimers = useRef<{ [key: string]: { start: NodeJS.Timeout; end: NodeJS.Timeout } }>({});
@@ -363,6 +367,7 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const setupScheduleTimer = useCallback((schedule: Schedule) => {
     let isStarting = false; // Flag untuk mencegah multiple start
     let hasStarted = false; // Flag untuk track apakah jadwal sudah start hari ini
+    let hasEnded = false;   // Flag untuk track apakah jadwal sudah berakhir hari ini
     
     const timer = setInterval(async () => {
       if (!isConnected || !schedule.enabled) return;
@@ -371,9 +376,10 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const now = new Date();
         const currentTime = now.toTimeString().substring(0, 5); // HH:mm
         
-        // Reset hasStarted flag di tengah malam
+        // Reset flags di tengah malam
         if (currentTime === "00:00") {
           hasStarted = false;
+          hasEnded = false;
         }
         
         if (currentTime === schedule.startTime && !hasStarted && !isStarting) {
@@ -429,9 +435,11 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
           } finally {
             isStarting = false; // Reset flag setelah proses selesai
           }
-        } else if (currentTime === schedule.endTime) {
+        } else if (currentTime === schedule.endTime && !hasEnded) {
           console.log(`Schedule ${schedule.name} end time matched: ${currentTime}`);
           try {
+            hasEnded = true; // Set flag bahwa jadwal sudah berakhir hari ini
+            
             // Kirim command scheduleEnd ke ESP32
             console.log('Sending scheduleEnd command...');
             await sendMessage({ type: 'command', command: 'scheduleEnd' });
@@ -635,15 +643,42 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setMotorRunning(isRunning);
         }
         
-        // Update moisture data
+        // Update moisture data - handle both legacy format and new multi-sensor format
         if (data.moisture !== undefined) {
-          setRemoteMoisture(data.moisture);
-          const now = Date.now();
-          setMoistureHistory(prev => {
-            const newHistory = [...prev, { timestamp: now, value: data.moisture, isAuto: data.autoMode }];
-            const cutoff = now - 60 * 60 * 1000; // 1 hour ago
-            return newHistory.filter(point => point.timestamp > cutoff);
-          });
+          if (Array.isArray(data.moisture)) {
+            // New format: Array of sensor data
+            setMoistureSensors(data.moisture);
+            
+            // Use first sensor value for backward compatibility or average
+            if (data.moisture.length > 0) {
+              const avgMoisture = data.moisture.reduce((sum, sensor) => sum + sensor.value, 0) / data.moisture.length;
+              setRemoteMoisture(avgMoisture);
+              
+              // Update history with data from all sensors
+              const now = Date.now();
+              setMoistureHistory(prev => {
+                const newEntries = data.moisture.map(sensor => ({
+                  timestamp: now,
+                  value: sensor.value,
+                  sensorId: sensor.id,
+                  isAuto: data.autoMode
+                }));
+                
+                const newHistory = [...prev, ...newEntries];
+                const cutoff = now - 60 * 60 * 1000; // 1 hour ago
+                return newHistory.filter(point => point.timestamp > cutoff);
+              });
+            }
+          } else {
+            // Legacy format: Single moisture value
+            setRemoteMoisture(data.moisture);
+            const now = Date.now();
+            setMoistureHistory(prev => {
+              const newHistory = [...prev, { timestamp: now, value: data.moisture, isAuto: data.autoMode }];
+              const cutoff = now - 60 * 60 * 1000; // 1 hour ago
+              return newHistory.filter(point => point.timestamp > cutoff);
+            });
+          }
         }
         
         // Update auto mode
@@ -658,6 +693,20 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Update sensor data
         if (data.temperature !== undefined && data.humidity !== undefined) {
           setSensorData({ temperature: data.temperature, humidity: data.humidity });
+        }
+        
+        // Update flood alert
+        if (data.floodAlert !== undefined) {
+          setFloodAlert(data.floodAlert);
+          
+          if (data.floodAlert) {
+            toast({
+              title: "⚠️ FLOOD ALERT!",
+              description: "Flood condition detected! Pump automatically stopped for safety.",
+              variant: "destructive",
+              duration: 10000
+            });
+          }
         }
       }
     } catch (error) {
@@ -691,6 +740,7 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
         systemOn,
         motorRunning,
         remoteMoisture,
+        moistureSensors,
         moistureHistory,
         lastRemoteUpdate,
         toggleSystem,
@@ -707,6 +757,7 @@ export const PumpProvider: React.FC<{ children: React.ReactNode }> = ({ children
         autoMode,
         toggleAutoMode,
         sensorData,
+        floodAlert,
       }}
     >
       {children}
